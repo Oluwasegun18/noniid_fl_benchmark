@@ -1,0 +1,101 @@
+experiment:
+  name: cifar10_common_protocol
+  seed: 1
+  trial: 1
+  output_dir: outputs
+  device: auto
+  deterministic: true
+
+data:
+  dataset: cifar10
+  data_dir: ./data
+  validation_fraction: 0.1
+  augmentation: false
+  subset_size: 5000
+
+partition:
+  method: dirichlet
+  alpha: 0.5
+  num_clients: 5
+  min_samples_per_client: 40
+  seed: 1
+  cache_dir: ./partition_cache
+
+model:
+  architecture: simple_cnn
+  num_classes: 10
+  initialization_seed: 1
+
+training:
+  optimizer: sgd
+  learning_rate: 0.01
+  momentum: 0.0
+  weight_decay: 0.0
+  local_epochs: 1
+  batch_size: 64
+  num_workers: 0
+
+federation:
+  participation_rate: 1.0
+  communication_rounds: 3
+  client_sampling_seed: 1
+
+algorithm:
+  name: fedavg
+  parameters:
+    fedprox_mu: 0.01
+    scaffold_server_lr: 1.0
+    fednova_server_lr: 1.0
+    feddyn_alpha: 0.01
+    moon_mu: 1.0
+    moon_temperature: 0.5
+    fedsam_rho: 0.05
+    fedgucci_beta: 0.1
+    fedgucci_num_anchors: 3
+    fedgucci_lambdas: [0.5]
+
+stopping:
+  mode: fixed_rounds
+  target_accuracy: null
+  convergence_tolerance: 0.0001
+  patience: 5
+  runtime_budget_sec: null
+
+evaluation:
+  frequency: 1
+  reporting_rule: final_round
+
+output:
+  save_checkpoints: true
+  checkpoint_frequency: 1
+
+resources:
+  energy:
+    # auto: use hardware counters when available, otherwise model CPU energy.
+    # measured_only: leave unsupported fields empty.
+    # modeled_only: skip hardware counters and use the configured CPU model.
+    mode: auto
+    allow_modeled_fallback: true
+
+    cpu:
+      # For Windows testing, replace these values with a defensible estimate
+      # for the processor or a measured average package power.
+      power_model: process_utilization
+      active_power_watts: 25.0
+      idle_power_watts: 5.0
+      include_idle_power: false
+
+    gpu:
+      device_index: 0
+      # Used only when NVML total-energy counters are unavailable.
+      sample_interval_sec: 0.1
+
+  communication:
+    # Per-client link assumptions used for modeled communication latency.
+    downlink_mbps: 100.0
+    uplink_mbps: 20.0
+    one_way_latency_ms: 10.0
+
+    # Keep zero until coefficients are selected for the target network.
+    downlink_j_per_byte: 0.0
+    uplink_j_per_byte: 0.0

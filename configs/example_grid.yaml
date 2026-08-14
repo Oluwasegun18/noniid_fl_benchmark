@@ -1,0 +1,4 @@
+grid:
+  training.algorithm: [fedavg, fedprox, scaffold]
+  experiment.seed: [1, 2]
+  partition.alpha: [0.1, 0.5]

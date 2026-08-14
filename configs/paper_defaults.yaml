@@ -1,0 +1,28 @@
+# Reference defaults are documented separately from the benchmark search space.
+# They are not silently injected; copy/select them explicitly when reproducing
+# a paper-specific protocol.
+fedavg:
+  training:
+    optimizer: sgd
+fedprox:
+  training:
+    optimizer: sgd
+scaffold:
+  training:
+    optimizer: sgd
+fednova:
+  training:
+    optimizer: sgd
+feddyn:
+  training:
+    optimizer: sgd
+moon:
+  training:
+    optimizer: sgd
+fedsam:
+  training:
+    optimizer: sgd
+fedgucci:
+  training:
+    optimizer: sgd
+  note: Historical global-model anchors follow the official FedGuCci rule; no additional anchor communication is counted when clients retain prior broadcasts.

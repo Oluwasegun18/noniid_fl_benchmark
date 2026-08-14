@@ -1,0 +1,12 @@
+grid:
+  algorithm.name:
+    - fedavg
+    - fedprox
+    - scaffold
+    - fednova
+    - feddyn
+    - moon
+    - fedsam
+    - fedgucci
+  experiment.seed:
+    - 1

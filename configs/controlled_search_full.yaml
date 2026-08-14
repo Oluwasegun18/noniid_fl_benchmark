@@ -1,0 +1,85 @@
+scenario_name: cifar10_dirichlet_a0p5_full
+output_dir: search_outputs
+
+algorithms: [fedavg, fedprox, scaffold, fednova, feddyn, moon, fedsam, fedgucci]
+
+seeds:
+  search_sampler_seed: 2026
+
+shared_search_space:
+  training.learning_rate:
+    type: log_uniform
+    low: 0.001
+    high: 0.1
+  training.local_epochs:
+    type: categorical
+    values: [1, 3, 5]
+  training.batch_size:
+    type: categorical
+    values: [32, 64, 128]
+  training.momentum:
+    type: categorical
+    values: [0.0, 0.9]
+  training.weight_decay:
+    type: categorical
+    values: [0.0, 0.0001, 0.001]
+
+algorithm_search_spaces:
+  fedavg: {}
+  fedprox:
+    algorithm.parameters.fedprox_mu:
+      type: categorical
+      values: [0.001, 0.01, 0.1, 1.0]
+  scaffold:
+    algorithm.parameters.scaffold_server_lr:
+      type: categorical
+      values: [0.1, 0.5, 1.0]
+  fednova:
+    algorithm.parameters.fednova_server_lr:
+      type: categorical
+      values: [0.1, 0.5, 1.0]
+  feddyn:
+    algorithm.parameters.feddyn_alpha:
+      type: log_uniform
+      low: 0.001
+      high: 1.0
+  moon:
+    algorithm.parameters.moon_mu:
+      type: categorical
+      values: [0.1, 1.0, 5.0, 10.0]
+    algorithm.parameters.moon_temperature:
+      type: categorical
+      values: [0.1, 0.5, 1.0]
+  fedsam:
+    algorithm.parameters.fedsam_rho:
+      type: categorical
+      values: [0.01, 0.05, 0.1]
+  fedgucci:
+    algorithm.parameters.fedgucci_beta:
+      type: categorical
+      values: [0.01, 0.05, 0.1, 0.5]
+    algorithm.parameters.fedgucci_num_anchors:
+      type: categorical
+      values: [1, 2, 3, 5]
+    algorithm.parameters.fedgucci_lambdas:
+      type: categorical
+      values: [[0.25], [0.5], [0.25, 0.5, 0.75]]
+
+budget:
+  search_method: random
+  max_configurations_per_algorithm: 30
+  search_seeds: [1]
+  confirmation_seeds: [11, 22, 33]
+  rounds_per_search_run: 50
+  rounds_per_confirmation_run: 100
+  max_total_runs_per_algorithm: 30
+  max_wall_time_hours_per_algorithm: 24
+
+selection:
+  metric: val_accuracy
+  mode: maximize
+  tie_breakers:
+    - mean_local_loss
+    - cumulative_wall_time_sec
+    - total_comm_bytes
+  constraints: {}
