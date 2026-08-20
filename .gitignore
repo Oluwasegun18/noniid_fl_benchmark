@@ -1,10 +1,10 @@
 __pycache__/
 *.py[cod]
 .venv/
-data/*
+data/
 outputs/
 partition_cache/
 .pytest_cache/
+search_outputs/*
+search_outputs_1/*
 *.pt
-search_outputs_1/
-search_outputs/

@@ -1,0 +1,118 @@
+# Paper-informed exhaustive search space for the first Dirichlet experiments.
+# CIFAR-10 is the primary literature reference.  The same shared operating
+# parameters are applied to every algorithm; method-specific hyperparameters
+# are added only where the original method introduces them.
+output_dir: search_outputs
+
+algorithms:
+  - fedavg
+  - fedprox
+  - scaffold
+  - fednova
+  - feddyn
+  - moon
+  - fedsam
+  - fedgucci
+
+search:
+  method: grid
+  exhaustive: true
+
+seeds:
+  search_sampler_seed: 2026
+
+# Shared local-training search space.
+# LR values are anchored by MOON (0.01), FedGuCci (0.04), and FedDyn/FedSAM
+# (0.1).  Local epochs cover FedGuCci (3), FedAvg/FedDyn (5), and MOON/FedSAM
+# (10), plus E=1 as the low-local-computation reference.  Batch sizes cover
+# commonly reported values while avoiding an unnecessarily large union grid.
+shared_search_space:
+  training.learning_rate:
+    type: grid
+    values: [0.01, 0.05, 0.1]
+  training.local_epochs:
+    type: grid
+    values: [1, 3, 5, 10]
+  training.batch_size:
+    type: grid
+    values: [32, 64, 128]
+  training.momentum:
+    type: grid
+    values: [0, 0.9]
+  training.weight_decay:
+    type: grid
+    values: [0, 1e-3, 1e-5]
+
+# Algorithm-specific dimensions.  Fixed method parameters remain in the base
+# configuration and are intentionally not expanded into artificial search axes.
+algorithm_search_spaces:
+  fedavg: {}
+
+  fedprox:
+    algorithm.parameters.fedprox_mu:
+      type: grid
+      values: [0.001, 0.01, 0.1, 1.0]
+
+  # The original SCAFFOLD experiments fix the global/server step size at 1 and
+  # tune the local step size.  Local LR is already searched in the shared grid.
+  scaffold: 
+    algorithm.parameters.scaffold_server_lr:
+      type: grid
+      values: [0.5, 1.0]
+
+  # FedNova uses the same local LR as FedAvg when the local solver is matched;
+  # the normalization rule is intrinsic to the algorithm, not a tuning axis.
+  fednova: {}
+
+  feddyn:
+    algorithm.parameters.feddyn_alpha:
+      type: grid
+      values: [0.001, 0.01, 0.1]
+
+  moon:
+    algorithm.parameters.moon_mu:
+      type: grid
+      values: [0.1, 1.0, 5.0, 10.0]
+    # The MOON paper uses temperature 0.5 by default.  It is kept fixed in the
+    # primary experiment rather than introducing an unsupported extra grid.
+
+  fedsam:
+    algorithm.parameters.fedsam_rho:
+      type: grid
+      values: [0.1, 0.5, 1.0]
+
+  fedgucci:
+    algorithm.parameters.fedgucci_beta:
+      type: grid
+      values: [0.025, 0.1, 0.4, 1.6]
+    algorithm.parameters.fedgucci_num_anchors:
+      type: grid
+      values: [1, 3, 5, 9]
+
+# Both search and confirmation terminate by validation convergence.  The two
+# max-round values are safety ceilings only, protecting against pathological
+# runs that never satisfy the plateau rule.
+termination:
+  mode: convergence
+  monitor: val_accuracy
+  min_delta: 0.0001
+  patience_evaluations: 10
+  min_rounds: 50
+  evaluation_frequency: 5
+  max_search_rounds: 1000
+  max_confirmation_rounds: 1000
+
+budget:
+  search_seeds: [1]
+  confirmation_seeds: [11, 22, 33]
+  max_total_runs_per_algorithm: null
+  max_wall_time_hours_per_algorithm: null
+
+selection:
+  metric: val_accuracy
+  mode: maximize
+  tie_breakers:
+    - mean_local_loss
+    - cumulative_wall_time_sec
+    - total_comm_bytes
+  constraints: {}

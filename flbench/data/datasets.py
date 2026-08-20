@@ -49,11 +49,12 @@ def targets_of(dataset):
 
 def _artificial_partitions(train_dataset, cfg):
     part=cfg['partition']; method=str(part.get('method','dirichlet')).lower()
+    dataset_name=str(cfg['data']['dataset']).lower()
     n=int(part['num_clients'])
     if method == 'iid':
         return iid_partition(len(train_dataset), n, int(part.get('seed',1)))
     if method == 'dirichlet':
-        return load_or_create(targets_of(train_dataset), part)
+        return load_or_create(targets_of(train_dataset), part, dataset_name=dataset_name)
     raise ValueError(f'Unsupported artificial partition method: {method}')
 
 
@@ -132,7 +133,12 @@ def _natural_split_user_records(users: dict, validation_fraction: float, seed: i
 
 
 class FEMNISTRecords(Dataset):
-    def __init__(self, records): self.records=records
+    def __init__(self, records):
+        self.records=records
+        self.targets=np.asarray(
+            [int(y) for _,y in records],
+            dtype=np.int64,
+        )
     def __len__(self): return len(self.records)
     def __getitem__(self,i):
         x,y=self.records[i]
@@ -158,15 +164,49 @@ def build_femnist(cfg):
             start=len(new_records); new_records += [train_records[j] for j in keep[old_id]]
             new_indices[new_id]=list(range(start,len(new_records))); new_names[new_id]=client_names[old_id]
         train_records,client_indices,client_names=new_records,new_indices,new_names
+    train_dataset=FEMNISTRecords(train_records)
+    validation_dataset=FEMNISTRecords(val_records)
+    test_dataset=FEMNISTRecords(test_records)
+    method=str(cfg['partition'].get('method','natural')).lower()
+    if method in {'dirichlet','iid'}:
+        artificial=_artificial_partitions(train_dataset,cfg)
+        return FederatedDatasetBundle(
+            train_dataset,validation_dataset,test_dataset,
+            artificial,'classification',62,(1,28,28),
+            client_names=None,
+            metadata={
+                'partition_source':'artificial',
+                'original_source':'LEAF_writer_records',
+            },
+        )
     cfg['partition']['num_clients']=len(client_indices)
-    return FederatedDatasetBundle(FEMNISTRecords(train_records),FEMNISTRecords(val_records),FEMNISTRecords(test_records),client_indices,'classification',62,(1,28,28),client_names=client_names,metadata={'partition_source':'natural_writer'})
+    return FederatedDatasetBundle(
+        train_dataset,validation_dataset,test_dataset,
+        client_indices,'classification',62,(1,28,28),
+        client_names=client_names,
+        metadata={'partition_source':'natural_writer'},
+    )
 
 
 DEFAULT_SHAKESPEARE_VOCAB=list("\n !\"&'(),-.0123456789:;>?ABCDEFGHIJKLMNOPQRSTUVWXYZ[]abcdefghijklmnopqrstuvwxyz}")
 
 class ShakespeareRecords(Dataset):
     def __init__(self, records, vocab, sequence_length=80):
-        self.records=records; self.vocab=vocab; self.lookup={c:i for i,c in enumerate(vocab)}; self.sequence_length=int(sequence_length); self.pad=0
+        self.records=records
+        self.vocab=vocab
+        self.lookup={c:i for i,c in enumerate(vocab)}
+        self.sequence_length=int(sequence_length)
+        self.pad=0
+        self.targets=np.asarray(
+            [
+                self.lookup.get(
+                    str(y)[0] if str(y) else "\n",
+                    self.pad,
+                )
+                for _,y in records
+            ],
+            dtype=np.int64,
+        )
     def __len__(self): return len(self.records)
     def __getitem__(self,i):
         x,y=self.records[i]; text=str(x)
@@ -193,8 +233,34 @@ def build_shakespeare(cfg):
             start=len(new_records); new_records += [train_records[j] for j in keep[old_id]]
             new_indices[new_id]=list(range(start,len(new_records))); new_names[new_id]=client_names[old_id]
         train_records,client_indices,client_names=new_records,new_indices,new_names
+    train_dataset=ShakespeareRecords(train_records,vocab,seq_len)
+    validation_dataset=ShakespeareRecords(val_records,vocab,seq_len)
+    test_dataset=ShakespeareRecords(test_records,vocab,seq_len)
+    method=str(cfg['partition'].get('method','natural')).lower()
+    if method in {'dirichlet','iid'}:
+        artificial=_artificial_partitions(train_dataset,cfg)
+        return FederatedDatasetBundle(
+            train_dataset,validation_dataset,test_dataset,
+            artificial,'next_character',len(vocab),(seq_len,),
+            vocabulary=vocab,
+            client_names=None,
+            metadata={
+                'partition_source':'artificial',
+                'original_source':'LEAF_speaking_role_records',
+                'sequence_length':seq_len,
+            },
+        )
     cfg['partition']['num_clients']=len(client_indices)
-    return FederatedDatasetBundle(ShakespeareRecords(train_records,vocab,seq_len),ShakespeareRecords(val_records,vocab,seq_len),ShakespeareRecords(test_records,vocab,seq_len),client_indices,'next_character',len(vocab),(seq_len,),vocabulary=vocab,client_names=client_names,metadata={'partition_source':'natural_speaking_role','sequence_length':seq_len})
+    return FederatedDatasetBundle(
+        train_dataset,validation_dataset,test_dataset,
+        client_indices,'next_character',len(vocab),(seq_len,),
+        vocabulary=vocab,
+        client_names=client_names,
+        metadata={
+            'partition_source':'natural_speaking_role',
+            'sequence_length':seq_len,
+        },
+    )
 
 
 DATASET_REGISTRY={

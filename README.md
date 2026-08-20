@@ -194,3 +194,63 @@ This release adds a unified dataset interface for FEMNIST, CIFAR-10, CIFAR-100, 
 - **Shakespeare:** expects LEAF-style JSON shards under `data/shakespeare/train` and `data/shakespeare/test` (or `data/shakespeare/data/{train,test}`). LEAF user/role IDs define natural FL clients.
 
 Dataset-specific example configurations are provided in `configs/cifar100.yaml`, `configs/covtype.yaml`, `configs/femnist.yaml`, and `configs/shakespeare.yaml`.
+
+
+## Exhaustive Dirichlet search matrix
+
+The first full search uses the same Dirichlet partition family for three
+severity cases on every dataset:
+
+- **highly non-IID:** alpha = 0.1
+- **mildly non-IID:** alpha = 0.5
+- **IID-like:** alpha = 100
+
+The alpha=100 case is intentionally called IID-like because it is still a
+Dirichlet allocation rather than an exact equal IID split.
+
+The controlled search now evaluates the complete Cartesian grid for each
+algorithm. There is no equal `max_configurations_per_algorithm` restriction.
+An algorithm with more method-specific hyperparameters naturally has a larger
+grid. The grid size and total search runtime are saved in each search summary.
+
+Inspect the setup:
+
+```bash
+python show_search_grid.py
+python run_dirichlet_search.py --list
+```
+
+Run one scenario:
+
+```bash
+python run_dirichlet_search.py --dataset cifar10 --case high
+python run_dirichlet_search.py --dataset cifar10 --case mild
+python run_dirichlet_search.py --dataset cifar10 --case iid
+```
+
+Submit all 15 dataset/severity scenarios on SLURM:
+
+```bash
+sbatch cluster/submit_dirichlet_grid_array.sh
+```
+
+Submit only one scenario:
+
+```bash
+sbatch --export=ALL,DATASET=cifar10,CASE=high \
+  cluster/run_single_dirichlet_case.sh
+```
+
+FEMNIST and Shakespeare continue to be loaded from LEAF-style source files,
+but for this experiment their flattened training examples are repartitioned
+with the same Dirichlet procedure as the other datasets. Their natural
+writer/speaking-role partitions remain available for later experiments.
+
+On a cluster without internet access, stage CIFAR-10, CIFAR-100, and Covtype
+before submitting compute jobs. FEMNIST and Shakespeare should be placed under
+`data/femnist` and `data/shakespeare`.
+
+
+## Convergence-based production search
+
+See `CONVERGENCE_SEARCH_GUIDE.md`. Search and confirmation now use the same validation-convergence rule and restore the best-validation checkpoint before final testing. The primary grid is paper-informed and exhaustive per algorithm.

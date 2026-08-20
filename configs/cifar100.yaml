@@ -15,7 +15,7 @@ partition:
   method: dirichlet
   alpha: 0.5
   num_clients: 10
-  min_samples_per_client: 100
+  min_samples_per_client: 20
   seed: 1
   cache_dir: ./partition_cache
 model:
@@ -32,7 +32,7 @@ training:
   num_workers: 0
 federation:
   participation_rate: 1.0
-  communication_rounds: 50
+  communication_rounds: 1000
   client_sampling_seed: 1
 algorithm:
   name: fedavg
@@ -49,13 +49,15 @@ algorithm:
     fedgucci_lambdas:
     - 0.5
 stopping:
-  mode: fixed_rounds
+  mode: convergence
+  monitor: val_accuracy
+  min_delta: 0.0001
+  patience_evaluations: 10
+  min_rounds: 50
   target_accuracy: null
-  convergence_tolerance: 0.0001
-  patience: 5
   runtime_budget_sec: null
 evaluation:
-  frequency: 1
+  frequency: 5
   reporting_rule: final_round
 output:
   save_checkpoints: true
