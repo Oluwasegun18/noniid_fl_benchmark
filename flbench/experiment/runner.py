@@ -93,12 +93,14 @@ def _best_model_path(output_dir: Path) -> Path:
 def run_experiment(cfg):
     """Run one FL experiment and return its output directory.
 
-    Convergence-based runs are monitored using validation accuracy.  Whenever
-    validation improves by more than ``stopping.min_delta``, the corresponding
-    global model is saved.  At termination we restore that best-validation
-    model and perform the final validation/test evaluation.  Consequently,
-    confirmation accuracy is measured at the best observed validation point,
-    not at an arbitrary later round after the metric has already plateaued.
+    Convergence-based runs are monitored using a moving average of validation
+    accuracy so late-stage non-IID oscillations do not repeatedly reset
+    patience.  Smoothing is used only for the stopping decision: whenever the
+    *raw* validation accuracy reaches a new best value, that global model is
+    saved.  At termination we restore the best raw-validation checkpoint and
+    perform the final validation/test evaluation.  Consequently, stopping is
+    robust to noise while model selection still reflects the strongest
+    observed validation model.
     """
     seed = int(cfg['experiment']['seed'])
     seed_everything(seed, bool(cfg['experiment'].get('deterministic', True)))
@@ -315,9 +317,12 @@ def run_experiment(cfg):
                 maximum_rounds,
             )
 
-            # Persist the strongest validation model immediately when it is
-            # observed.  This file is independent of periodic resume checkpoints.
-            if should_evaluate and stopping.last_improved:
+            # Persist the strongest *raw* validation model immediately when
+            # observed.  The stopping controller intentionally keeps this
+            # separate from its smoothed convergence statistic.  Therefore a
+            # moving-average plateau can end training without changing which
+            # checkpoint is ultimately selected for confirmation.
+            if should_evaluate and stopping.raw_last_improved:
                 torch.save({
                     'round': round_idx,
                     'val_accuracy': last_eval['val_accuracy'],
@@ -483,6 +488,12 @@ def run_experiment(cfg):
             'termination_round': int(final_row.get('round', 0)),
             'stopping_reason': final_row.get('stopping_reason'),
             'convergence_evaluations_without_improvement': stopping.wait,
+            'convergence_smoothing_window': stopping.smoothing_window,
+            'convergence_smoothed_best_accuracy': (
+                None if stopping.best == float('-inf') else stopping.best
+            ),
+            'convergence_smoothed_best_round': stopping.best_round,
+            'convergence_final_smoothed_accuracy': stopping.current_smoothed,
         }
         save_json(summary, output_dir / 'summary.json')
         save_json(summary, output_dir / 'status.json')

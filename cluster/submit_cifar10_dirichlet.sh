@@ -1,7 +1,8 @@
 #!/bin/bash -l
-#SBATCH --job-name=fl_grid_one
-#SBATCH --output=logs/grid_%j.out
-#SBATCH --error=logs/grid_%j.err
+#SBATCH --job-name=c10_dir_grid
+#SBATCH --output=logs/cifar10_%A_%a.out
+#SBATCH --error=logs/cifar10_%A_%a.err
+#SBATCH --array=0-2
 #SBATCH --time=48:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
@@ -10,46 +11,35 @@
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
-# Run one dataset / heterogeneity case.
-#
-# Examples:
-#   sbatch --export=ALL,DATASET=cifar10,CASE=high cluster/run_single_dirichlet_case.sh
-#   sbatch --export=ALL,DATASET=cifar10,CASE=mild cluster/run_single_dirichlet_case.sh
-#   sbatch --export=ALL,DATASET=cifar10,CASE=iid  cluster/run_single_dirichlet_case.sh
-#
-# Valid DATASET values:
-#   cifar10, cifar100, covtype, femnist, shakespeare
-#
-# Valid CASE values:
-#   high  -> Dirichlet alpha=0.1
-#   mild  -> Dirichlet alpha=0.5
-#   iid   -> Dirichlet alpha=100 (IID-like)
+# CIFAR-10 only: run the three initial Dirichlet cases in parallel.
+#   array task 0 -> highly non-IID, alpha=0.1
+#   array task 1 -> mildly non-IID, alpha=0.5
+#   array task 2 -> IID-like,       alpha=100
 # -----------------------------------------------------------------------------
 
 module purge
 module load python/3.12.0/default
 module load cuda/12.8/default
 
-DATASET="${DATASET:-cifar10}"
-CASE="${CASE:-high}"
 PROJECT_DIR="${PROJECT_DIR:-${SLURM_SUBMIT_DIR}}"
-
 cd "${PROJECT_DIR}"
 mkdir -p logs search_outputs partition_cache
 
+CASES=(high mild iid)
+CASE="${CASES[$SLURM_ARRAY_TASK_ID]}"
+
 printf '\n===== SLURM JOB INFORMATION =====\n'
 echo "Job ID: ${SLURM_JOB_ID}"
+echo "Array task ID: ${SLURM_ARRAY_TASK_ID}"
 echo "Node: $(hostname)"
 echo "Project directory: ${PROJECT_DIR}"
-echo "Dataset: ${DATASET}"
+echo "Dataset: cifar10"
 echo "Case: ${CASE}"
 echo "Start time: $(date)"
 
 printf '\n===== PYTHON / GPU CHECK =====\n'
-echo "Python path:"
 which python
 python -V
-
 nvidia-smi || true
 
 python - <<'PY'
@@ -70,9 +60,9 @@ PY
 
 python -c "import torchvision; print('torchvision:', torchvision.__version__, 'file:', torchvision.__file__)"
 
-printf '\n===== STARTING CONTROLLED SEARCH =====\n'
+printf '\n===== STARTING CIFAR-10 SEARCH =====\n'
 python run_dirichlet_search.py \
-    --dataset "${DATASET}" \
+    --dataset cifar10 \
     --case "${CASE}" \
     --search-config configs/controlled_search_grid.yaml
 

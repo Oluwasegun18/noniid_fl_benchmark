@@ -57,3 +57,74 @@ def test_primary_grid_sizes():
         algorithm: len(grid_candidates(cfg, algorithm))
         for algorithm in cfg["algorithms"]
     } == expected
+
+
+def test_smoothed_convergence_ignores_small_noniid_oscillations():
+    cfg = {
+        "stopping": {
+            "mode": "convergence",
+            "smoothing_window": 3,
+            "min_delta": 0.001,
+            "patience_evaluations": 4,
+            "min_rounds": 1,
+        }
+    }
+    controller = StoppingController(cfg)
+
+    # A noisy plateau around 0.73.  Individual observations rise and fall,
+    # but the moving average does not improve by 0.1 percentage point.
+    values = [0.7300, 0.7310, 0.7290, 0.7305, 0.7295, 0.7308, 0.7297]
+    result = (False, None)
+    for idx, value in enumerate(values, start=1):
+        result = controller.update(idx, value, 0.0, 100)
+        if result[0]:
+            break
+
+    assert result == (True, "convergence")
+    assert controller.wait >= 4
+
+
+def test_raw_best_is_independent_of_smoothed_stopping_best():
+    cfg = {
+        "stopping": {
+            "mode": "convergence",
+            "smoothing_window": 3,
+            "min_delta": 0.01,
+            "patience_evaluations": 10,
+            "min_rounds": 1,
+        }
+    }
+    controller = StoppingController(cfg)
+    controller.update(1, 0.70, 0.0, 100)
+    controller.update(2, 0.72, 0.0, 100)
+    controller.update(3, 0.71, 0.0, 100)
+
+    # Raw-best checkpoint should correspond to the single strongest observed
+    # validation value, not to the moving-average stopping statistic.
+    assert controller.raw_best == 0.72
+    assert controller.raw_best_round == 2
+    assert controller.best != controller.raw_best
+
+
+def test_smoothing_state_survives_resume():
+    cfg = {
+        "stopping": {
+            "mode": "convergence",
+            "smoothing_window": 3,
+            "min_delta": 0.001,
+            "patience_evaluations": 10,
+            "min_rounds": 1,
+        }
+    }
+    original = StoppingController(cfg)
+    original.update(1, 0.70, 0.0, 100)
+    original.update(2, 0.71, 0.0, 100)
+    original.update(3, 0.705, 0.0, 100)
+
+    restored = StoppingController(cfg)
+    restored.load_state_dict(original.state_dict())
+
+    assert list(restored.metric_history) == list(original.metric_history)
+    assert restored.raw_best == original.raw_best
+    assert restored.best == original.best
+    assert restored.wait == original.wait

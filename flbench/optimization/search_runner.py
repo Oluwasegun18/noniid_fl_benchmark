@@ -78,8 +78,9 @@ def _prepare_run_config(
     cfg["stopping"].update({
         "mode": "convergence",
         "monitor": str(termination_cfg.get("monitor", "val_accuracy")),
-        "min_delta": float(termination_cfg.get("min_delta", 1e-4)),
+        "min_delta": float(termination_cfg.get("min_delta", 1e-3)),
         "patience_evaluations": int(termination_cfg.get("patience_evaluations", 10)),
+        "smoothing_window": int(termination_cfg.get("smoothing_window", 3)),
         "min_rounds": int(termination_cfg.get("min_rounds", 50)),
     })
     cfg["evaluation"]["frequency"] = int(
@@ -169,8 +170,9 @@ def run_controlled_search_from_dicts(
             "termination": {
                 "mode": "convergence",
                 "monitor": termination_cfg.get("monitor", "val_accuracy"),
-                "min_delta": termination_cfg.get("min_delta", 1e-4),
+                "min_delta": termination_cfg.get("min_delta", 1e-3),
                 "patience_evaluations": termination_cfg.get("patience_evaluations", 10),
+                "smoothing_window": termination_cfg.get("smoothing_window", 3),
                 "min_rounds": termination_cfg.get("min_rounds", 50),
                 "evaluation_frequency": termination_cfg.get("evaluation_frequency", 5),
                 "max_search_rounds": search_rounds,

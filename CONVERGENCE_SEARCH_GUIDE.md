@@ -55,3 +55,30 @@ sbatch --export=ALL,DATASET=cifar10,CASE=high cluster/run_single_dirichlet_case.
 sbatch --export=ALL,DATASET=cifar10,CASE=mild cluster/run_single_dirichlet_case.sh
 sbatch --export=ALL,DATASET=cifar10,CASE=iid cluster/run_single_dirichlet_case.sh
 ```
+
+## Robust convergence under non-IID oscillation
+
+The controlled search now separates **stopping** from **model selection**.
+
+Validation accuracy is evaluated at the configured evaluation frequency. For
+stopping only, the runner computes a moving average over the most recent three
+validation observations. Patience is reset only when this smoothed statistic
+improves by at least `min_delta = 0.001` (0.1 percentage point). With
+`patience_evaluations = 10` and `evaluation_frequency = 5`, the default rule
+requires approximately 50 communication rounds without a meaningful smoothed
+improvement before declaring convergence.
+
+The best model is *not* selected from the smoothed metric. The raw validation
+accuracy is tracked separately, and every new raw maximum is saved to
+`best_validation_model.pt`. Once convergence is declared, the runner restores
+that raw-best checkpoint and computes the final validation and test metrics.
+
+This design avoids two common failure modes in non-IID FL:
+
+1. small late-stage oscillations repeatedly resetting patience; and
+2. returning the last plateau model rather than the best observed validation
+   checkpoint.
+
+`max_search_rounds` and `max_confirmation_rounds` remain hard safety ceilings.
+A run that reaches either ceiling is reported with `stopping_reason=max_rounds`
+rather than being labeled converged.

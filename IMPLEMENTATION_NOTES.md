@@ -15,3 +15,26 @@ CIFAR-10 and CIFAR-100 use torchvision; Covtype uses scikit-learn; FEMNIST and S
 ## Checkpoint resume
 
 Checkpoints preserve the global model, algorithm-specific state, Python client-sampling RNG state, client DataLoader generator states, stopping-controller state, elapsed runtime, and resolved configuration. This is intended to make cluster job resumption reproduce the sampling and batch-order state of the interrupted run.
+
+### Smoothed convergence controller
+
+`flbench/experiment/stopping.py` uses a moving-average convergence statistic for
+`mode: convergence`. The default controlled-search configuration is:
+
+```yaml
+termination:
+  mode: convergence
+  monitor: val_accuracy
+  smoothing_window: 3
+  min_delta: 0.001
+  patience_evaluations: 10
+  min_rounds: 50
+  evaluation_frequency: 5
+  max_search_rounds: 1000
+  max_confirmation_rounds: 1000
+```
+
+Smoothing affects termination only. Raw validation accuracy controls the saved
+best-model checkpoint. Checkpoint/resume state includes the moving window,
+smoothed best, raw best, and patience counter, so a resumed job preserves the
+same convergence trajectory.
