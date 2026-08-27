@@ -20,27 +20,76 @@ class FederatedAlgorithm(ABC):
     def server_update(self, global_model, updates, cfg):
         self.weighted_average(global_model, updates)
 
+    # @staticmethod
+    # def weighted_average(global_model, updates):
+    #     if not updates:
+    #         raise ValueError("At least one client update is required.")
+    #     total = sum(update.num_samples for update in updates)
+    #     if total <= 0:
+    #         raise ValueError("Total client sample count must be positive.")
+
+    #     current = global_model.state_dict()
+    #     new_state = {}
+    #     for key, reference in current.items():
+    #         if reference.is_floating_point() or reference.is_complex():
+    #             value = torch.zeros_like(reference, dtype=torch.float32)
+    #             for update in updates:
+    #                 value += (
+    #                     update.state_dict[key].float()
+    #                     * (update.num_samples / total)
+    #                 )
+    #             new_state[key] = value.to(reference.dtype)
+    #         else:
+    #             new_state[key] = updates[0].state_dict[key].to(reference.dtype)
+    #     global_model.load_state_dict(new_state, strict=True)
+
+
     @staticmethod
     def weighted_average(global_model, updates):
+        """Sample-weighted aggregation with explicit device handling."""
+
         if not updates:
             raise ValueError("At least one client update is required.")
-        total = sum(update.num_samples for update in updates)
+
+        total = sum(int(update.num_samples) for update in updates)
+
         if total <= 0:
             raise ValueError("Total client sample count must be positive.")
 
         current = global_model.state_dict()
         new_state = {}
+
         for key, reference in current.items():
-            if reference.is_floating_point() or reference.is_complex():
-                value = torch.zeros_like(reference, dtype=torch.float32)
+
+            if reference.is_floating_point():
+
+                value = torch.zeros_like(
+                    reference,
+                    dtype=torch.float32,
+                    device=reference.device,
+                )
+
                 for update in updates:
-                    value += (
-                        update.state_dict[key].float()
-                        * (update.num_samples / total)
+                    weight = float(update.num_samples) / float(total)
+
+                    local_tensor = update.state_dict[key].to(
+                        device=value.device,
+                        dtype=value.dtype,
                     )
-                new_state[key] = value.to(reference.dtype)
+
+                    value.add_(local_tensor, alpha=weight)
+
+                new_state[key] = value.to(
+                    device=reference.device,
+                    dtype=reference.dtype,
+                )
+
             else:
-                new_state[key] = updates[0].state_dict[key].to(reference.dtype)
+                new_state[key] = updates[0].state_dict[key].to(
+                    device=reference.device,
+                    dtype=reference.dtype,
+                )
+
         global_model.load_state_dict(new_state, strict=True)
 
     def download_num_bytes(self, global_model, selected_clients: int) -> int:
