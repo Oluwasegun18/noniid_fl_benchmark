@@ -61,7 +61,7 @@ evaluation:
   reporting_rule: final_round
 output:
   save_checkpoints: true
-  checkpoint_frequency: 10
+  checkpoint_frequency: 50
 resources:
   energy:
     mode: auto
