@@ -17,34 +17,49 @@ module load cuda/12.8/default
 PROJECT_DIR="${PROJECT_DIR:-${SLURM_SUBMIT_DIR}}"
 cd "$PROJECT_DIR"
 
+echo "========================================"
+echo "Environment"
+echo "========================================"
+
 # IMPORTANT: create logs/ before sbatch because Slurm opens log paths before
 # the job script starts: mkdir -p logs
 
-source .venv/bin/activate
-echo "Python environment:"
+
 which python
 python -V
 
-echo "Optuna version:"
-python -c "import optuna; print(optuna.__version__)"
-
-echo "Torch / CUDA:"
 python - <<'PY'
+import sys
+import optuna
 import torch
+
+print("Python executable:", sys.executable)
+print("Optuna:", optuna.__version__)
 print("Torch:", torch.__version__)
 print("CUDA available:", torch.cuda.is_available())
-if torch.cuda.is_available():
-    print("GPU:", torch.cuda.get_device_name(0))
+if not torch.cuda.is_available():
+    raise RuntimeError("CUDA GPU is not available in this SLURM job.")
+
+print("GPU:", torch.cuda.get_device_name(0))
 PY
 
+echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
+
 nvidia-smi || true
+
+echo "========================================"
+echo "Resolving experiment case"
+echo "========================================"
 
 read -r DATASET CASE ALGORITHM < <(
   python run_case_index.py --dataset cifar10 --index "${SLURM_ARRAY_TASK_ID}"
 )
 
 echo "Search case: dataset=${DATASET} case=${CASE} algorithm=${ALGORITHM}"
-echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
+
+echo "========================================"
+echo "Starting Optuna search"
+echo "========================================"
 
 # One SLURM task owns one GPU and executes one Optuna study. The %4 array cap
 # uses at most 4 GPUs and 32 CPUs, matching the stated cluster quota.
