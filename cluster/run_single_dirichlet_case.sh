@@ -2,7 +2,7 @@
 #SBATCH --job-name=fl_grid_one
 #SBATCH --output=logs/grid_%j.out
 #SBATCH --error=logs/grid_%j.err
-#SBATCH --time=48:00:00
+#SBATCH --time=180:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:1
