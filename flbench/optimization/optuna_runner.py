@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import optuna
+from optuna.trial import TrialState
 import yaml
 
 from flbench.config import load_config
@@ -30,6 +31,20 @@ def _scenario_root(search_cfg: dict[str, Any]) -> Path:
     return Path(search_cfg.get("output_dir", "search_outputs")) / str(
         search_cfg.get("scenario_name", "controlled_search")
     )
+
+def classify_trial_failure(exc: Exception) -> str:
+    message = str(exc).lower()
+
+    if isinstance(exc, FloatingPointError):
+        return "diverged_nonfinite_loss"
+
+    if "out of memory" in message:
+        return "cuda_oom"
+
+    if isinstance(exc, RuntimeError):
+        return "runtime_error"
+
+    return "unknown_failure"
 
 
 def _storage(search_cfg: dict[str, Any], algorithm_root: Path):
@@ -152,6 +167,9 @@ def _export_study(
 
     complete = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
     if not complete:
+        raise RuntimeError(
+                    f"No successful trials were completed for study {study.study_name}"
+                )
         return
 
     best = study.best_trial
@@ -265,6 +283,17 @@ def run_optuna_search_from_dicts(
                 summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
                 seed_summaries.append(summary)
                 output_dirs.append(str(output))
+            except (FloatingPointError, RuntimeError) as exc:
+                trial.set_user_attr("run_status", "failed")
+                trial.set_user_attr(
+                    "failure_type",
+                    classify_trial_failure(exc),
+                )
+                trial.set_user_attr(
+                    "failure_message",
+                    str(exc)[:1000],
+                )
+                raise
             except Exception as exc:
                 trial.set_user_attr("error", f"{type(exc).__name__}: {exc}")
                 trial.set_user_attr("output_dirs", "|".join(output_dirs + [str(run_dir)]))
@@ -300,7 +329,7 @@ def run_optuna_search_from_dicts(
     # With GridSampler, n_trials=None runs until the predefined grid is exhausted.
     # Multiple workers may point to the same study/storage; each worker should use
     # n_jobs=1 so SLURM owns GPU allocation.
-    study.optimize(objective, n_trials=n_trials, n_jobs=1, catch=(RuntimeError,))
+    study.optimize(objective, n_trials=n_trials, n_jobs=1, catch=(RuntimeError, FloatingPointError))
     _export_study(study, base, search_cfg, algorithm, algorithm_root)
     return algorithm_root
 
