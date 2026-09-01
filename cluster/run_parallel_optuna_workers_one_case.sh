@@ -3,7 +3,7 @@
 #SBATCH --output=logs/optworker_%A_%a.out
 #SBATCH --error=logs/optworker_%A_%a.err
 #SBATCH --array=0-3
-#SBATCH --time=180:00:00
+#SBATCH --time=168:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:1
