@@ -20,8 +20,23 @@ cd "$PROJECT_DIR"
 # IMPORTANT: create logs/ before sbatch because Slurm opens log paths before
 # the job script starts: mkdir -p logs
 
+source .venv/bin/activate
+echo "Python environment:"
 which python
 python -V
+
+echo "Optuna version:"
+python -c "import optuna; print(optuna.__version__)"
+
+echo "Torch / CUDA:"
+python - <<'PY'
+import torch
+print("Torch:", torch.__version__)
+print("CUDA available:", torch.cuda.is_available())
+if torch.cuda.is_available():
+    print("GPU:", torch.cuda.get_device_name(0))
+PY
+
 nvidia-smi || true
 
 read -r DATASET CASE ALGORITHM < <(
