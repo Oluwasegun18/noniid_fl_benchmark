@@ -9,3 +9,6 @@ pytest>=7.4
 psutil>=5.9
 
 pynvml>=11.5
+
+# Distributed / resumable controlled parameter search
+optuna>=4.0

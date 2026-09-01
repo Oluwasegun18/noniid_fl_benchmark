@@ -91,19 +91,21 @@ termination:
   mode: convergence
   monitor: val_accuracy
   min_delta: 0.001
-  patience_evaluations: 5
+  patience_evaluations: 10
   min_rounds: 50
-  evaluation_frequency: 2
-  max_search_rounds: 1000
-  max_confirmation_rounds: 1000
-  smoothing_window: 4
+  evaluation_frequency: 1
+  max_search_rounds: 500
+  max_confirmation_rounds: 500
+  smoothing_window: 3
 budget:
   search_seeds:
-  - 1
+  - 42
   confirmation_seeds:
   - 11
   - 22
   - 33
+  - 44
+  - 55
   max_total_runs_per_algorithm: null
   max_wall_time_hours_per_algorithm: null
 selection:
@@ -114,3 +116,15 @@ selection:
   - cumulative_wall_time_sec
   - total_comm_bytes
   constraints: {}
+
+# Optuna is used as a resumable search coordinator. GridSampler preserves the
+# exhaustive predefined parameter space used by the methodology.
+optuna:
+  sampler: grid
+  storage:
+    # Journal storage requires no database service and supports resumed workers.
+    # For multi-node production use, OPTUNA_STORAGE_URL may override this with
+    # a PostgreSQL/MySQL RDB URL supplied by the cluster environment.
+    backend: journal
+  search_energy_role: descriptive
+  confirmation_energy_role: ranking

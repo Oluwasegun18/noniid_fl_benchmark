@@ -254,3 +254,7 @@ before submitting compute jobs. FEMNIST and Shakespeare should be placed under
 ## Convergence-based production search
 
 See `CONVERGENCE_SEARCH_GUIDE.md`. Search and confirmation now use the same validation-convergence rule and restore the best-validation checkpoint before final testing. The primary grid is paper-informed and exhaustive per algorithm.
+
+## Parallel search / confirmation update
+
+The recommended workflow is now **Optuna search -> selected configuration -> independent confirmation**. Search energy is descriptive only; confirmation-stage measured GPU energy is the only primary energy-ranking quantity. See `OPTUNA_PARALLEL_ENERGY_GUIDE.md` and use `cluster/submit_cifar10_optuna_search.sh` followed by `cluster/submit_cifar10_confirmation.sh`.

@@ -90,6 +90,32 @@ def _best_model_path(output_dir: Path) -> Path:
     return output_dir / 'best_validation_model.pt'
 
 
+def _warmup_accelerator(model, loader, device, steps: int = 2) -> None:
+    """Warm CUDA kernels/caches before the run-level energy boundary.
+
+    The warm-up is inference-only and does not modify model parameters. This
+    avoids charging one algorithm/client for one-time CUDA initialization.
+    """
+    if device.type != 'cuda' or steps <= 0:
+        return
+    previous_training = model.training
+    model.eval()
+    iterator = iter(loader)
+    with torch.no_grad():
+        for _ in range(steps):
+            try:
+                x, _ = next(iterator)
+            except StopIteration:
+                iterator = iter(loader)
+                try:
+                    x, _ = next(iterator)
+                except StopIteration:
+                    break
+            _ = model(x.to(device, non_blocking=True))
+    torch.cuda.synchronize(device)
+    model.train(previous_training)
+
+
 def run_experiment(cfg):
     """Run one FL experiment and return its output directory.
 
@@ -218,6 +244,16 @@ def run_experiment(cfg):
         }
 
         # ------------------------- Federated training -------------------------
+        # Search-stage energy is descriptive. Confirmation runners override the
+        # energy role to ``ranking`` and require an isolated, measured GPU
+        # reading before that value is used for algorithm ranking.
+        warmup_steps = int(
+            cfg.get('resources', {}).get('energy', {}).get('gpu_warmup_steps', 2)
+        )
+        _warmup_accelerator(global_model, validation_loader, device, warmup_steps)
+        run_energy_tracker = EnergyTracker(cfg, device, phase='full_training_run')
+        run_energy_tracker.start()
+
         for round_idx in range(start_round, maximum_rounds + 1):
             round_start = time.perf_counter()
             selected_clients = client_rng.sample(
@@ -457,6 +493,12 @@ def run_experiment(cfg):
             if done:
                 break
 
+        # Close the run-level measurement boundary before restoring the best
+        # checkpoint and producing final reporting metrics. The measured value
+        # therefore covers federated training, server aggregation, and periodic
+        # validation performed during convergence monitoring.
+        run_energy = run_energy_tracker.stop()
+
         # -------------------- Final best-model confirmation ------------------
         # Restore the best validation model before producing the final summary.
         # This is especially important when patience allows several plateau
@@ -487,6 +529,24 @@ def run_experiment(cfg):
             'best_validation_accuracy': best_validation_accuracy,
             'termination_round': int(final_row.get('round', 0)),
             'stopping_reason': final_row.get('stopping_reason'),
+            # Run-level energy is preferred over summing nested client/round
+            # deltas. ``run_energy_primary_j`` is measured GPU energy only;
+            # the hybrid value is retained descriptively and is not the primary
+            # ranking quantity.
+            'run_energy_primary_j': run_energy.gpu_energy_primary_j,
+            'run_gpu_energy_measured_j': run_energy.gpu_energy_measured_j,
+            'run_cpu_energy_measured_j': run_energy.cpu_energy_measured_j,
+            'run_cpu_energy_modeled_j': run_energy.compute_energy_modeled_j,
+            'run_total_energy_hybrid_j': run_energy.total_energy_hybrid_j,
+            'run_energy_source': run_energy.energy_source,
+            'run_energy_role': run_energy.energy_role,
+            'run_energy_valid_for_ranking': run_energy.energy_valid_for_ranking,
+            'run_energy_invalid_reason': run_energy.energy_invalid_reason,
+            'run_gpu_counter_scope': run_energy.gpu_counter_scope,
+            'run_gpu_uuid': run_energy.gpu_uuid,
+            'run_concurrent_gpu_processes_detected': (
+                run_energy.concurrent_gpu_processes_detected
+            ),
             'convergence_evaluations_without_improvement': stopping.wait,
             'convergence_smoothing_window': stopping.smoothing_window,
             'convergence_smoothed_best_accuracy': (

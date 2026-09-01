@@ -22,7 +22,9 @@ CANDIDATE_FIELDS = [
     "candidate_id", "algorithm", "status", "rank", "seed", "trial",
     "val_accuracy", "test_accuracy", "macro_f1", "mean_local_loss",
     "cumulative_wall_time_sec", "total_comm_bytes",
-    "round_compute_energy_reported_j", "best_validation_round",
+    "round_gpu_energy_measured_j", "round_compute_energy_reported_j",
+    "run_gpu_energy_measured_j", "run_total_energy_hybrid_j",
+    "best_validation_round",
     "termination_round", "stopping_reason", "error", "parameters_json",
     "output_dir",
 ]
@@ -216,6 +218,7 @@ def run_controlled_search_from_dicts(
                     candidate_run_dir,
                     termination_cfg,
                 )
+                cfg.setdefault("resources", {}).setdefault("energy", {})["role"] = "descriptive"
                 try:
                     output = run_experiment(cfg)
                     output_path = Path(output)
@@ -234,7 +237,9 @@ def run_controlled_search_from_dicts(
                 numeric_keys = [
                     "val_accuracy", "test_accuracy", "macro_f1", "mean_local_loss",
                     "cumulative_wall_time_sec", "total_comm_bytes",
-                    "round_compute_energy_reported_j", "best_validation_round",
+                    "round_gpu_energy_measured_j", "round_compute_energy_reported_j",
+                    "run_gpu_energy_measured_j", "run_total_energy_hybrid_j",
+                    "best_validation_round",
                     "termination_round",
                 ]
                 averaged = {}
@@ -300,6 +305,10 @@ def run_controlled_search_from_dicts(
                 termination_cfg,
             )
             cfg["experiment"]["trial"] = trial
+            energy_cfg = cfg.setdefault("resources", {}).setdefault("energy", {})
+            energy_cfg["role"] = "ranking"
+            energy_cfg["require_valid_for_ranking"] = True
+            energy_cfg.setdefault("check_gpu_isolation", True)
             try:
                 output = run_experiment(cfg)
                 output_path = Path(output)

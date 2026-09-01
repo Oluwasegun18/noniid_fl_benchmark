@@ -47,11 +47,22 @@ class EnergyReading:
     cpu_energy_measured_j: Optional[float]
     gpu_energy_measured_j: Optional[float]
     compute_energy_modeled_j: Optional[float]
+    # Backward-compatible hybrid total. Do not use this field as the primary
+    # ranking metric because it can mix measured and modeled components.
     compute_energy_reported_j: Optional[float]
+    # Explicitly separated energy quantities for analysis.
+    gpu_energy_primary_j: Optional[float]
+    total_energy_hybrid_j: Optional[float]
     cpu_utilization_fraction: Optional[float]
     elapsed_sec: float
     energy_source: str
     energy_is_estimated: bool
+    energy_role: str
+    energy_valid_for_ranking: bool
+    energy_invalid_reason: Optional[str]
+    gpu_counter_scope: str
+    gpu_uuid: Optional[str]
+    concurrent_gpu_processes_detected: bool
 
     def to_dict(self, prefix: str = "") -> dict[str, Any]:
         values = asdict(self)
@@ -161,6 +172,13 @@ class EnergyTracker:
         self.phase = phase
 
         energy_cfg = cfg.get("resources", {}).get("energy", {})
+        self.energy_role = str(energy_cfg.get("role", "descriptive")).lower()
+        self.require_valid_for_ranking = bool(
+            energy_cfg.get("require_valid_for_ranking", False)
+        )
+        self.check_gpu_isolation = bool(
+            energy_cfg.get("check_gpu_isolation", True)
+        )
         legacy_mode = cfg.get("resources", {}).get("energy_measurement", "auto")
         self.mode = str(energy_cfg.get("mode", legacy_mode)).lower()
         self.allow_modeled_fallback = bool(
@@ -197,6 +215,11 @@ class EnergyTracker:
         self._gpu_start_j: Optional[float] = None
         self._gpu_counter_supported = False
         self._gpu_power_sampler: Optional[_NvmlPowerSampler] = None
+        self._gpu_counter_scope = "unavailable"
+        self._gpu_uuid: Optional[str] = None
+        self._foreign_gpu_pids: set[int] = set()
+        self._isolation_stop = threading.Event()
+        self._isolation_thread: Optional[threading.Thread] = None
         self._initialize_nvml()
 
     @staticmethod
@@ -226,6 +249,21 @@ class EnergyTracker:
             )
         return domains
 
+    def _visible_cuda_token(self) -> Optional[str]:
+        """Return the CUDA_VISIBLE_DEVICES token for the logical device.
+
+        SLURM commonly remaps physical GPUs to logical CUDA index 0. Using
+        NVML index 0 directly can therefore target the wrong physical device.
+        """
+        visible = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
+        if not visible:
+            return None
+        tokens = [token.strip() for token in visible.split(",") if token.strip()]
+        logical_index = self.device.index if self.device.index is not None else 0
+        if 0 <= logical_index < len(tokens):
+            return tokens[logical_index]
+        return None
+
     def _initialize_nvml(self) -> None:
         if self.device.type != "cuda":
             return
@@ -233,14 +271,40 @@ class EnergyTracker:
             import pynvml
 
             pynvml.nvmlInit()
-            index = (
-                self.device.index
-                if self.device.index is not None
-                else self.gpu_device_index
-            )
-            handle = pynvml.nvmlDeviceGetHandleByIndex(index)
+            token = self._visible_cuda_token()
+            handle = None
+
+            if token and (token.startswith("GPU-") or token.startswith("MIG-")):
+                try:
+                    handle = pynvml.nvmlDeviceGetHandleByUUID(token)
+                except TypeError:
+                    handle = pynvml.nvmlDeviceGetHandleByUUID(token.encode())
+                self._gpu_counter_scope = (
+                    "mig_device" if token.startswith("MIG-") else "physical_gpu"
+                )
+            elif token and token.isdigit():
+                handle = pynvml.nvmlDeviceGetHandleByIndex(int(token))
+                self._gpu_counter_scope = "physical_gpu"
+            else:
+                index = (
+                    self.device.index
+                    if self.device.index is not None
+                    else self.gpu_device_index
+                )
+                handle = pynvml.nvmlDeviceGetHandleByIndex(index)
+                self._gpu_counter_scope = "physical_gpu"
+
             self._pynvml = pynvml
             self._gpu_handle = handle
+            try:
+                raw_uuid = pynvml.nvmlDeviceGetUUID(handle)
+                if isinstance(raw_uuid, bytes):
+                    raw_uuid = raw_uuid.decode()
+                self._gpu_uuid = str(raw_uuid)
+                if self._gpu_uuid.startswith("MIG-"):
+                    self._gpu_counter_scope = "mig_device"
+            except Exception:
+                self._gpu_uuid = token
 
             try:
                 pynvml.nvmlDeviceGetTotalEnergyConsumption(handle)
@@ -255,6 +319,68 @@ class EnergyTracker:
         except Exception:
             self._pynvml = None
             self._gpu_handle = None
+            self._gpu_counter_scope = "unavailable"
+
+    def _foreign_compute_pids(self) -> set[int]:
+        if (
+            not self.check_gpu_isolation
+            or self._pynvml is None
+            or self._gpu_handle is None
+        ):
+            return set()
+
+        processes = None
+        for function_name in (
+            "nvmlDeviceGetComputeRunningProcesses_v3",
+            "nvmlDeviceGetComputeRunningProcesses_v2",
+            "nvmlDeviceGetComputeRunningProcesses",
+        ):
+            function = getattr(self._pynvml, function_name, None)
+            if function is None:
+                continue
+            try:
+                processes = function(self._gpu_handle)
+                break
+            except Exception:
+                continue
+        if processes is None:
+            return set()
+
+        own_pids = {os.getpid()}
+        try:
+            own_pids.update(child.pid for child in self._process.children(recursive=True))
+        except Exception:
+            pass
+        return {
+            int(proc.pid)
+            for proc in processes
+            if getattr(proc, "pid", None) is not None
+            and int(proc.pid) not in own_pids
+        }
+
+    def _start_isolation_monitor(self) -> None:
+        if (
+            self.energy_role != "ranking"
+            or not self.check_gpu_isolation
+            or self._gpu_handle is None
+        ):
+            return
+
+        def monitor() -> None:
+            while not self._isolation_stop.is_set():
+                self._foreign_gpu_pids.update(self._foreign_compute_pids())
+                self._isolation_stop.wait(1.0)
+
+        self._isolation_stop.clear()
+        self._isolation_thread = threading.Thread(target=monitor, daemon=True)
+        self._isolation_thread.start()
+
+    def _stop_isolation_monitor(self) -> None:
+        self._isolation_stop.set()
+        if self._isolation_thread is not None:
+            self._isolation_thread.join(timeout=2.0)
+            self._isolation_thread = None
+        self._foreign_gpu_pids.update(self._foreign_compute_pids())
 
     def _sync_device(self) -> None:
         if self.device.type == "cuda" and torch.cuda.is_available():
@@ -273,6 +399,8 @@ class EnergyTracker:
         self._rapl_start = [domain.read_joules() for domain in self._rapl_domains]
 
         if self._gpu_handle is not None:
+            self._foreign_gpu_pids.update(self._foreign_compute_pids())
+            self._start_isolation_monitor()
             if self._gpu_counter_supported:
                 try:
                     self._gpu_start_j = (
@@ -378,6 +506,7 @@ class EnergyTracker:
 
         cpu_measured = self._stop_cpu_measurement()
         gpu_measured, gpu_method = self._stop_gpu_measurement()
+        self._stop_isolation_monitor()
 
         measured_values = [
             value
@@ -393,7 +522,8 @@ class EnergyTracker:
             source_parts.append(f"gpu:{gpu_method}")
 
         # Model CPU energy only when CPU hardware measurement is unavailable.
-        # This is useful on Windows CPU tests and on clusters without RAPL access.
+        # The hybrid total remains available descriptively, but measured GPU
+        # energy is the primary accelerator metric for algorithm ranking.
         if cpu_measured is None and self.allow_modeled_fallback:
             modeled = self._modeled_cpu_energy(elapsed_sec, utilization)
             source_parts.append(f"cpu_modeled:{self.cpu_power_model}")
@@ -402,19 +532,42 @@ class EnergyTracker:
         if modeled is not None:
             reported_values.append(modeled)
 
-        reported = sum(reported_values) if reported_values else None
+        hybrid_total = sum(reported_values) if reported_values else None
+        gpu_primary = gpu_measured
         is_estimated = modeled is not None
         source = "+".join(source_parts) or "unavailable"
+
+        invalid_reasons: list[str] = []
+        if self.energy_role == "ranking":
+            if gpu_primary is None:
+                invalid_reasons.append("gpu_energy_unavailable")
+            if self._foreign_gpu_pids:
+                invalid_reasons.append(
+                    "concurrent_gpu_processes:"
+                    + ",".join(str(pid) for pid in sorted(self._foreign_gpu_pids))
+                )
+            if self._gpu_counter_scope == "unavailable":
+                invalid_reasons.append("gpu_counter_scope_unavailable")
+
+        valid_for_ranking = not invalid_reasons and gpu_primary is not None
 
         return EnergyReading(
             cpu_energy_measured_j=cpu_measured,
             gpu_energy_measured_j=gpu_measured,
             compute_energy_modeled_j=modeled,
-            compute_energy_reported_j=reported,
+            compute_energy_reported_j=hybrid_total,
+            gpu_energy_primary_j=gpu_primary,
+            total_energy_hybrid_j=hybrid_total,
             cpu_utilization_fraction=utilization,
             elapsed_sec=elapsed_sec,
             energy_source=source,
             energy_is_estimated=is_estimated,
+            energy_role=self.energy_role,
+            energy_valid_for_ranking=valid_for_ranking,
+            energy_invalid_reason=(";".join(invalid_reasons) or None),
+            gpu_counter_scope=self._gpu_counter_scope,
+            gpu_uuid=self._gpu_uuid,
+            concurrent_gpu_processes_detected=bool(self._foreign_gpu_pids),
         )
 
 
@@ -483,6 +636,9 @@ def system_metadata(device: torch.device) -> dict[str, Any]:
         "torch_version": torch.__version__,
         "cuda_available": torch.cuda.is_available(),
         "selected_device": str(device),
+        "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+        "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
+        "slurm_array_task_id": os.environ.get("SLURM_ARRAY_TASK_ID"),
         "cuda_device_name": None,
     }
     if torch.cuda.is_available():

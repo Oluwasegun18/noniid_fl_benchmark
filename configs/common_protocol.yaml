@@ -65,7 +65,13 @@ output:
 resources:
   energy:
     mode: auto
+    # Search-stage energy is descriptive. Confirmation runner changes role to
+    # ranking and validates GPU measurement isolation.
+    role: descriptive
     allow_modeled_fallback: true
+    check_gpu_isolation: true
+    require_valid_for_ranking: false
+    gpu_warmup_steps: 2
     cpu:
       power_model: process_utilization
       active_power_watts: 25.0
