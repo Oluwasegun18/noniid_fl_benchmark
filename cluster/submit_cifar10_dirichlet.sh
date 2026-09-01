@@ -12,7 +12,7 @@ set -euo pipefail
 
 # -----------------------------------------------------------------------------
 # CIFAR-10 only: run the three initial Dirichlet cases in parallel.
-#   array task 0 -> highly non-IID, alpha=0.1
+#   array task 0 -> highly non-IID, alpha=0.01
 #   array task 1 -> mildly non-IID, alpha=0.5
 #   array task 2 -> IID-like,       alpha=100
 # -----------------------------------------------------------------------------

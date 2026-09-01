@@ -21,7 +21,7 @@ set -euo pipefail
 #   cifar10, cifar100, covtype, femnist, shakespeare
 #
 # Valid CASE values:
-#   high  -> Dirichlet alpha=0.1
+#   high  -> Dirichlet alpha=0.01
 #   mild  -> Dirichlet alpha=0.5
 #   iid   -> Dirichlet alpha=100 (IID-like)
 # -----------------------------------------------------------------------------
