@@ -38,6 +38,8 @@ For CIFAR-10, all 3 Dirichlet cases x 8 algorithms are represented by 24 array t
 sbatch cluster/submit_cifar10_optuna_search.sh
 ```
 
+ python run_optuna_dirichlet_search.py --dataset covtype --case high --algorithm fedavg --search-config configs/controlled_search_grid.yaml
+
 The script requests 8 CPUs + 1 GPU per task and uses `%4`, so the maximum concurrent request is 32 CPUs and 4 GPUs.
 
 ### Multiple Optuna workers for one large case

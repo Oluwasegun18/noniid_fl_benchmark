@@ -10,9 +10,9 @@
 
 set -euo pipefail
 
-module purge
-module load python/3.12.0/default
-module load cuda/12.8/default
+# module purge
+# module load python/3.12.0/default
+# module load cuda/12.8/default
 
 PROJECT_DIR="${PROJECT_DIR:-${SLURM_SUBMIT_DIR}}"
 cd "$PROJECT_DIR"
