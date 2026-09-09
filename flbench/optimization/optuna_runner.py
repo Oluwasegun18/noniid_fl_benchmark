@@ -7,6 +7,8 @@ import statistics
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
+import sys
+
 
 import optuna
 from optuna.trial import TrialState
@@ -27,10 +29,26 @@ def _load_yaml(path: str | Path) -> dict[str, Any]:
     return value
 
 
+# def _scenario_root(search_cfg: dict[str, Any]) -> Path:
+#     return Path(search_cfg.get("output_dir", "search_outputs")) / str(
+#         search_cfg.get("scenario_name", "controlled_search")
+#     )
+
 def _scenario_root(search_cfg: dict[str, Any]) -> Path:
-    return Path(search_cfg.get("output_dir", "search_outputs")) / str(
-        search_cfg.get("scenario_name", "controlled_search")
-    )
+    output_dir = search_cfg.get("output_dir", "search_outputs")
+
+    # Use a short local path on Windows if the configured path is relative.
+    if os.name == "nt":
+        output_path = Path(output_dir)
+        if not output_path.is_absolute():
+            output_path = Path("C:/fl_search/search_outputs")
+    else:
+        output_path = Path(output_dir)
+
+    return (
+        output_path
+        / str(search_cfg.get("scenario_name", "controlled_search"))
+    ).resolve()
 
 def classify_trial_failure(exc: Exception) -> str:
     message = str(exc).lower()
@@ -47,39 +65,105 @@ def classify_trial_failure(exc: Exception) -> str:
     return "unknown_failure"
 
 
+# def _storage(search_cfg: dict[str, Any], algorithm_root: Path):
+#     """Build Optuna storage.
+
+#     For cluster workers, an explicit RDB URL is the most robust option. A
+#     Journal file is supported as a zero-service alternative on a shared
+#     filesystem. SQLite is kept only for single-worker/local use.
+#     """
+#     cfg = search_cfg.get("optuna", {}).get("storage", {})
+#     env_url = os.environ.get("OPTUNA_STORAGE_URL")
+#     url = env_url or cfg.get("url")
+#     if url:
+#         return str(url)
+
+#     backend = str(cfg.get("backend", "journal")).lower()
+#     if backend == "journal":
+#         from optuna.storages import JournalStorage
+#         from optuna.storages.journal import JournalFileBackend
+
+#         configured = cfg.get("path")
+#         path = Path(configured) if configured else algorithm_root / "optuna_journal.log"
+#         if not path.is_absolute():
+#             # Keep relative configured paths anchored to the scenario folder.
+#             path = algorithm_root / path
+#         path.parent.mkdir(parents=True, exist_ok=True)
+#         return JournalStorage(JournalFileBackend(str(path)))
+
+#     if backend == "sqlite":
+#         db_path = algorithm_root / "optuna.db"
+#         return f"sqlite:///{db_path.resolve()}"
+
+#     raise ValueError(
+#         f"Unsupported Optuna storage backend '{backend}'. Use journal, sqlite, "
+#         "or provide optuna.storage.url / OPTUNA_STORAGE_URL."
+#     )
+
 def _storage(search_cfg: dict[str, Any], algorithm_root: Path):
     """Build Optuna storage.
 
-    For cluster workers, an explicit RDB URL is the most robust option. A
-    Journal file is supported as a zero-service alternative on a shared
-    filesystem. SQLite is kept only for single-worker/local use.
+    For cluster workers, an explicit RDB URL is the most robust option.
+    Journal storage is supported as a zero-service alternative.
+    SQLite is intended only for single-worker/local use.
     """
     cfg = search_cfg.get("optuna", {}).get("storage", {})
+
     env_url = os.environ.get("OPTUNA_STORAGE_URL")
     url = env_url or cfg.get("url")
+
     if url:
         return str(url)
 
-    backend = str(cfg.get("backend", "journal")).lower()
+    configured_backend = str(
+        cfg.get("backend", "journal")
+    ).lower()
+
+    # JournalFileBackend relies on filesystem locking/symlinks that are
+    # problematic for normal Windows user sessions.
+    if sys.platform.startswith("win"):
+        backend = "sqlite"
+    else:
+        backend = configured_backend
+
+    print(
+        f"[Optuna storage] platform={sys.platform}, "
+        f"configured={configured_backend}, selected={backend}"
+    )
+
     if backend == "journal":
         from optuna.storages import JournalStorage
         from optuna.storages.journal import JournalFileBackend
 
         configured = cfg.get("path")
-        path = Path(configured) if configured else algorithm_root / "optuna_journal.log"
-        if not path.is_absolute():
-            # Keep relative configured paths anchored to the scenario folder.
-            path = algorithm_root / path
+
+        if configured:
+            path = Path(configured)
+
+            # A user-specified relative path is relative to algorithm_root.
+            if not path.is_absolute():
+                path = algorithm_root / path
+        else:
+            # Default path is already constructed from algorithm_root.
+            # Do NOT prepend algorithm_root again.
+            path = algorithm_root / "optuna_journal.log"
+
+        path = path.resolve()
         path.parent.mkdir(parents=True, exist_ok=True)
-        return JournalStorage(JournalFileBackend(str(path)))
+
+        return JournalStorage(
+            JournalFileBackend(str(path))
+        )
 
     if backend == "sqlite":
-        db_path = algorithm_root / "optuna.db"
-        return f"sqlite:///{db_path.resolve()}"
+        db_path = (algorithm_root / "optuna.db").resolve()
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        return f"sqlite:///{db_path}"
 
     raise ValueError(
-        f"Unsupported Optuna storage backend '{backend}'. Use journal, sqlite, "
-        "or provide optuna.storage.url / OPTUNA_STORAGE_URL."
+        f"Unsupported Optuna storage backend '{backend}'. "
+        "Use journal, sqlite, or provide "
+        "optuna.storage.url / OPTUNA_STORAGE_URL."
     )
 
 
