@@ -109,3 +109,6 @@ The measurement stops before restoration of the best checkpoint and final report
 ## Aggregation device fix
 
 `FederatedAlgorithm.weighted_average()` now explicitly transfers stored client tensors to the global model's device and dtype before aggregation. Client updates may remain on CPU between local training and aggregation, while arithmetic is performed on the correct GPU device. This resolves the observed `cuda:0` versus `cpu` aggregation failure across FedAvg/SCAFFOLD and other methods using the shared averaging path.
+
+
+

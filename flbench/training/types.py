@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import Any
 import torch
-from __future__ import annotations
+
 
 @dataclass
 class TrainResult:
