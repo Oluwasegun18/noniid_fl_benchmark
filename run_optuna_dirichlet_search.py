@@ -21,6 +21,11 @@ CASES = {
     "high": {"alpha": 0.01, "label": "highly_non_iid"},
     "mild": {"alpha": 0.5, "label": "mildly_non_iid"},
     "iid": {"alpha": 100.0, "label": "iid_like"},
+    "natural": {
+        "name": "natural",
+        "partition": "natural",
+        "alpha": None,
+    },
 }
 ALGORITHMS = ["fedavg", "fedprox", "scaffold", "fednova", "feddyn", "moon", "fedsam", "fedgucci"]
 
@@ -38,17 +43,109 @@ def parse_args():
 
 def build_case(args):
     case = CASES[args.case]
+
     base = load_config(DATASETS[args.dataset])
-    search_cfg = yaml.safe_load(Path(args.search_config).read_text(encoding="utf-8"))
+
+    search_cfg = yaml.safe_load(
+        Path(args.search_config).read_text(
+            encoding="utf-8"
+        )
+    )
+
     base["data"]["dataset"] = args.dataset
-    base["partition"]["method"] = "dirichlet"
-    base["partition"]["alpha"] = case["alpha"]
-    base["partition"]["cache_namespace"] = args.dataset
-    base["experiment"]["name"] = f"{args.dataset}_dirichlet_{case['label']}"
-    search_cfg = copy.deepcopy(search_cfg)
-    alpha_tag = str(case["alpha"]).replace(".", "p")
-    search_cfg["scenario_name"] = f"{args.dataset}_dirichlet_{case['label']}_a{alpha_tag}"
+
+    if args.case == "natural":
+
+        base["partition"]["method"] = "natural"
+
+        base["partition"].pop("alpha", None)
+        base["partition"].pop(
+            "dirichlet_alpha",
+            None,
+        )
+
+        experiment_name = (
+            f"{args.dataset}_natural"
+        )
+
+        scenario_name = (
+            f"{args.dataset}_natural"
+        )
+
+    else:
+
+        base["partition"]["method"] = "dirichlet"
+        base["partition"]["alpha"] = case["alpha"]
+
+        case_name = case.get(
+            "name",
+            case.get("label", args.case),
+        )
+
+        alpha_tag = str(
+            case["alpha"]
+        ).replace(".", "p")
+
+        experiment_name = (
+            f"{args.dataset}_dirichlet_"
+            f"{case_name}"
+        )
+
+        scenario_name = (
+            f"{args.dataset}_dirichlet_"
+            f"{case_name}_a{alpha_tag}"
+        )
+
+    base["partition"]["cache_namespace"] = (
+        args.dataset
+    )
+
+    base["experiment"]["name"] = (
+        experiment_name
+    )
+
+    search_cfg = copy.deepcopy(
+        search_cfg
+    )
+
+    search_cfg["scenario_name"] = (
+        scenario_name
+    )
+
     return base, search_cfg
+
+# def build_case(args):
+#     case = CASES[args.case]
+#     base = load_config(DATASETS[args.dataset])
+#     search_cfg = yaml.safe_load(Path(args.search_config).read_text(encoding="utf-8"))
+#     base["data"]["dataset"] = args.dataset
+#     if args.case == "natural":
+#         base["partition"]["method"] = "natural"
+
+#         base["partition"].pop("alpha", None)
+#         base["partition"].pop("dirichlet_alpha", None)
+
+#     else:
+#         base["partition"]["method"] = "dirichlet"
+#         base["partition"]["alpha"] = case["alpha"]
+#     # base["partition"]["method"] = "dirichlet"
+#     # base["partition"]["alpha"] = case["alpha"]
+#     base["partition"]["cache_namespace"] = args.dataset
+#     base["experiment"]["name"] = f"{args.dataset}_dirichlet_{case['label']}"
+#     search_cfg = copy.deepcopy(search_cfg)
+#     if args.case == "natural":
+#         scenario_name = f"{args.dataset}_natural"
+#     else:
+#         alpha_tag = str(case["alpha"]).replace(".", "p")
+#         scenario_name = (
+#             f"{args.dataset}_dirichlet_"
+#             f"{case['name']}_a{alpha_tag}"
+#         )
+#     search_cfg["scenario_name"] = scenario_name
+
+#     # alpha_tag = str(case["alpha"]).replace(".", "p")
+#     # search_cfg["scenario_name"] = f"{args.dataset}_dirichlet_{case['label']}_a{alpha_tag}"
+#     return base, search_cfg
 
 
 def main():

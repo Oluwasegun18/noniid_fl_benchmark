@@ -8,3 +8,4 @@ partition_cache/
 search_outputs/*
 search_outputs_1/*
 *.pt
+logs/*

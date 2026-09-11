@@ -184,7 +184,13 @@ def build_femnist(cfg):
         train_dataset,validation_dataset,test_dataset,
         client_indices,'classification',62,(1,28,28),
         client_names=client_names,
-        metadata={'partition_source':'natural_writer'},
+        metadata={
+            'partition_source': 'natural_writer',
+            'partition_method': 'natural',
+            'num_natural_clients': len(client_indices),
+            'min_samples_per_client': min_samples,
+        },
+        # metadata={'partition_source':'natural_writer'},
     )
 
 
@@ -245,10 +251,17 @@ def build_shakespeare(cfg):
             vocabulary=vocab,
             client_names=None,
             metadata={
-                'partition_source':'artificial',
-                'original_source':'LEAF_speaking_role_records',
-                'sequence_length':seq_len,
+                'partition_source': 'natural_speaking_role',
+                'partition_method': 'natural',
+                'num_natural_clients': len(client_indices),
+                'min_samples_per_client': min_samples,
+                'sequence_length': seq_len,
             },
+            # metadata={
+            #     'partition_source':'artificial',
+            #     'original_source':'LEAF_speaking_role_records',
+            #     'sequence_length':seq_len,
+            # },
         )
     cfg['partition']['num_clients']=len(client_indices)
     return FederatedDatasetBundle(
