@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
 #SBATCH --partition=ps
-
+#SBATCH --exclude=antenna2
 #SBATCH --gres=gpu:1
 
 
