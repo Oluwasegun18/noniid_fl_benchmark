@@ -6,7 +6,10 @@
 #SBATCH --time=168:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
-#SBATCH --gres=gpu:1
+#SBATCH --partition=ps
+#SBATCH --nodelist=speed-[37,39-42]
+#SBATCH --gres=gpu:nvidia_a100_1g.20gb:1
+
 
 set -euo pipefail
 
@@ -21,6 +24,11 @@ echo "========================================"
 echo "Environment"
 echo "========================================"
 
+echo "Node: $(hostname)"
+echo "Job ID: ${SLURM_JOB_ID}"
+echo "Array task: ${SLURM_ARRAY_TASK_ID}"
+echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
+
 # IMPORTANT: create logs/ before sbatch because Slurm opens log paths before
 # the job script starts: mkdir -p logs
 
@@ -28,6 +36,10 @@ echo "========================================"
 which python
 python -V
 
+echo "----- NVIDIA -----"
+nvidia-smi || true
+
+echo "----- PyTorch -----"
 python - <<'PY'
 import sys
 import optuna
@@ -36,14 +48,15 @@ import torch
 print("Python executable:", sys.executable)
 print("Optuna:", optuna.__version__)
 print("Torch:", torch.__version__)
+print("Torch CUDA build:", torch.version.cuda)
 print("CUDA available:", torch.cuda.is_available())
-if not torch.cuda.is_available():
+if torch.cuda.is_available():
+    print("GPU count:", torch.cuda.device_count())
+    print("GPU:", torch.cuda.get_device_name(0))
+else:
     raise RuntimeError("CUDA GPU is not available in this SLURM job.")
-
-print("GPU:", torch.cuda.get_device_name(0))
 PY
 
-echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
 
 nvidia-smi || true
 
