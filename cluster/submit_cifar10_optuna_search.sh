@@ -8,7 +8,7 @@
 #SBATCH --mem=32G
 #SBATCH --partition=ps
 #SBATCH --nodelist=speed-[37,39-42]
-#SBATCH --gres=gpu:nvidia_a100_1g.20gb:1
+#SBATCH --gres=gpu:1
 
 
 set -euo pipefail
