@@ -4,7 +4,7 @@
 #SBATCH --error=logs/optuna_%A_%a.err
 #SBATCH --array=0-23%4
 #SBATCH --time=168:00:00
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
 #SBATCH --partition=ps
 #SBATCH --nodelist=speed-[37,39-42]
