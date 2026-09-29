@@ -237,12 +237,37 @@ def _export_study(
         rows.append(row)
 
     all_fields = [
-        "trial_number", "state", "objective", "val_accuracy", "test_accuracy",
-        "macro_f1", "mean_local_loss", "cumulative_wall_time_sec",
-        "total_comm_bytes", "run_gpu_energy_measured_j",
-        "run_total_energy_hybrid_j", "termination_round", "stopping_reason",
-        "parameters_json", "output_dirs", "error",
+        "trial_number",
+        "state",
+        "objective",
+        "val_accuracy",
+        "test_accuracy",
+        "macro_f1",
+        "mean_local_loss",
+        "cumulative_wall_time_sec",
+        "total_comm_bytes",
+        "run_gpu_energy_measured_j",
+        "run_total_energy_hybrid_j",
+        "termination_round",
+        "stopping_reason",
+
+        # Failure metadata
+        "run_status",
+        "failure_type",
+        "failure_message",
+
+        "parameters_json",
+        "output_dirs",
+        "error",
     ]
+
+    # all_fields = [
+    #     "trial_number", "state", "objective", "val_accuracy", "test_accuracy",
+    #     "macro_f1", "mean_local_loss", "cumulative_wall_time_sec",
+    #     "total_comm_bytes", "run_gpu_energy_measured_j",
+    #     "run_total_energy_hybrid_j", "termination_round", "stopping_reason",
+    #     "parameters_json", "output_dirs", "error",
+    # ]
     with (algorithm_root / "optuna_trials.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=all_fields)
         writer.writeheader()
@@ -272,24 +297,72 @@ def _export_study(
         possible = len(grid_candidates(search_cfg, algorithm))
     except Exception:
         pass
+    stats = _evaluated_configuration_stats(study)
+
     summary = {
-        "status": "search_complete" if possible is not None and len(complete) >= possible else "search_in_progress",
+        "status": (
+            "search_complete"
+            if possible is not None
+            and stats["unique_attempted"] >= possible
+            else "search_in_progress"
+        ),
         "study_name": study.study_name,
         "algorithm": algorithm,
         "sampler": type(study.sampler).__name__,
+
+        # Search-space accounting
         "possible_configurations": possible,
+        "unique_configurations_attempted": stats["unique_attempted"],
+        "unique_configurations_successful": stats["unique_successful"],
+        "unique_configurations_failed_only": stats["unique_failed_only"],
+        "unique_configurations_retried": stats["unique_retried"],
+        "total_terminal_trial_records": stats["total_terminal_trials"],
+
+        # Keep old fields for backward compatibility
         "completed_trials": len(complete),
-        "failed_trials": sum(t.state == optuna.trial.TrialState.FAIL for t in study.trials),
+        "failed_trials": sum(
+            t.state == TrialState.FAIL
+            for t in study.trials
+        ),
+
         "best_trial_number": best.number,
-        "best_observed_validation_accuracy": best.user_attrs.get("val_accuracy"),
+        "best_observed_validation_accuracy": best.user_attrs.get(
+            "val_accuracy"
+        ),
         "best_parameters": best_params,
+
         "energy_policy": {
             "role": "descriptive",
             "ranking_use": False,
             "primary_logged_quantity": "run_gpu_energy_measured_j",
-            "note": "Search-stage energy is reported as search cost only and is not used for algorithm energy ranking.",
+            "note": (
+                "Search-stage energy is descriptive only and is "
+                "not used for algorithm energy ranking."
+            ),
         },
     }
+
+
+
+    # summary = {
+    #     "status": "search_complete" if possible is not None and len(complete) >= possible else "search_in_progress",
+    #     "study_name": study.study_name,
+    #     "algorithm": algorithm,
+    #     "sampler": type(study.sampler).__name__,
+    #     "possible_configurations": possible,
+    #     "completed_trials": len(complete),
+    #     "failed_trials": sum(t.state == optuna.trial.TrialState.FAIL for t in study.trials),
+    #     "best_trial_number": best.number,
+    #     "best_observed_validation_accuracy": best.user_attrs.get("val_accuracy"),
+    #     "best_parameters": best_params,
+    #     "energy_policy": {
+    #         "role": "descriptive",
+    #         "ranking_use": False,
+    #         "primary_logged_quantity": "run_gpu_energy_measured_j",
+    #         "note": "Search-stage energy is reported as search cost only and is not used for algorithm energy ranking.",
+    #     },
+    # }
+
     (algorithm_root / "search_summary.json").write_text(
         json.dumps(summary, indent=2), encoding="utf-8"
     )
@@ -413,9 +486,58 @@ def run_optuna_search_from_dicts(
     # With GridSampler, n_trials=None runs until the predefined grid is exhausted.
     # Multiple workers may point to the same study/storage; each worker should use
     # n_jobs=1 so SLURM owns GPU allocation.
-    study.optimize(objective, n_trials=n_trials, n_jobs=1, catch=(RuntimeError, FloatingPointError))
-    _export_study(study, base, search_cfg, algorithm, algorithm_root)
+    possible = None
+
+    try:
+        possible = len(
+            grid_candidates(
+                search_cfg,
+                algorithm,
+            )
+        )
+    except Exception:
+        pass
+
+    stats_before = _evaluated_configuration_stats(study)
+
+    grid_exhausted = (
+        possible is not None
+        and stats_before["unique_attempted"] >= possible
+    )
+
+    if grid_exhausted:
+        print(
+            f"[Optuna] Grid already exhausted for "
+            f"{study.study_name}: "
+            f"{stats_before['unique_attempted']}/"
+            f"{possible} unique configurations attempted. "
+            f"Skipping additional optimization."
+        )
+    else:
+        study.optimize(
+            objective,
+            n_trials=n_trials,
+            n_jobs=1,
+            catch=(
+                RuntimeError,
+                FloatingPointError,
+            ),
+        )
+
+    # Always refresh exported CSV/summary/best configuration,
+    # even when the search was already complete.
+    _export_study(
+        study,
+        base,
+        search_cfg,
+        algorithm,
+        algorithm_root,
+    )
+
     return algorithm_root
+    # study.optimize(objective, n_trials=n_trials, n_jobs=1, catch=(RuntimeError, FloatingPointError))
+    # _export_study(study, base, search_cfg, algorithm, algorithm_root)
+    # return algorithm_root
 
 
 def run_optuna_search(
@@ -429,3 +551,69 @@ def run_optuna_search(
         load_config(base_config_path), _load_yaml(search_config_path), algorithm,
         n_trials=n_trials,
     )
+
+
+def _trial_parameter_key(trial: optuna.trial.FrozenTrial) -> str:
+    """Canonical key used to identify one unique hyperparameter configuration."""
+    return json.dumps(
+        trial.params,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+
+def _evaluated_configuration_stats(
+    study: optuna.Study,
+) -> dict[str, Any]:
+    """
+    Summarize unique configurations represented by terminal Optuna trials.
+
+    COMPLETE trials are successful evaluations.
+    FAIL trials are retained as attempted configurations. This is important
+    for configurations that genuinely diverged, e.g. non-finite local loss.
+    Duplicate/re-evaluated trials do not increase the unique count.
+    """
+    terminal_trials = [
+        trial
+        for trial in study.trials
+        if trial.state in {
+            TrialState.COMPLETE,
+            TrialState.FAIL,
+        }
+    ]
+
+    by_configuration: dict[str, list[Any]] = {}
+
+    for trial in terminal_trials:
+        key = _trial_parameter_key(trial)
+        by_configuration.setdefault(key, []).append(trial)
+
+    unique_successful = set()
+    unique_failed_only = set()
+    unique_retried = set()
+
+    for key, trials in by_configuration.items():
+        states = {trial.state for trial in trials}
+
+        if TrialState.COMPLETE in states:
+            unique_successful.add(key)
+
+        if (
+            TrialState.FAIL in states
+            and TrialState.COMPLETE not in states
+        ):
+            unique_failed_only.add(key)
+
+        if len(trials) > 1:
+            unique_retried.add(key)
+
+    return {
+        "unique_attempted": len(by_configuration),
+        "unique_successful": len(unique_successful),
+        "unique_failed_only": len(unique_failed_only),
+        "unique_retried": len(unique_retried),
+        "total_terminal_trials": len(terminal_trials),
+    }
+
