@@ -121,6 +121,7 @@ selection:
 # exhaustive predefined parameter space used by the methodology.
 optuna:
   sampler: grid
+  cover_interrupted_trials: true
   storage:
     # Journal storage requires no database service and supports resumed workers.
     # For multi-node production use, OPTUNA_STORAGE_URL may override this with

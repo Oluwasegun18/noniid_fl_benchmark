@@ -29,11 +29,6 @@ def _load_yaml(path: str | Path) -> dict[str, Any]:
     return value
 
 
-# def _scenario_root(search_cfg: dict[str, Any]) -> Path:
-#     return Path(search_cfg.get("output_dir", "search_outputs")) / str(
-#         search_cfg.get("scenario_name", "controlled_search")
-#     )
-
 def _scenario_root(search_cfg: dict[str, Any]) -> Path:
     output_dir = search_cfg.get("output_dir", "search_outputs")
 
@@ -64,41 +59,6 @@ def classify_trial_failure(exc: Exception) -> str:
 
     return "unknown_failure"
 
-
-# def _storage(search_cfg: dict[str, Any], algorithm_root: Path):
-#     """Build Optuna storage.
-
-#     For cluster workers, an explicit RDB URL is the most robust option. A
-#     Journal file is supported as a zero-service alternative on a shared
-#     filesystem. SQLite is kept only for single-worker/local use.
-#     """
-#     cfg = search_cfg.get("optuna", {}).get("storage", {})
-#     env_url = os.environ.get("OPTUNA_STORAGE_URL")
-#     url = env_url or cfg.get("url")
-#     if url:
-#         return str(url)
-
-#     backend = str(cfg.get("backend", "journal")).lower()
-#     if backend == "journal":
-#         from optuna.storages import JournalStorage
-#         from optuna.storages.journal import JournalFileBackend
-
-#         configured = cfg.get("path")
-#         path = Path(configured) if configured else algorithm_root / "optuna_journal.log"
-#         if not path.is_absolute():
-#             # Keep relative configured paths anchored to the scenario folder.
-#             path = algorithm_root / path
-#         path.parent.mkdir(parents=True, exist_ok=True)
-#         return JournalStorage(JournalFileBackend(str(path)))
-
-#     if backend == "sqlite":
-#         db_path = algorithm_root / "optuna.db"
-#         return f"sqlite:///{db_path.resolve()}"
-
-#     raise ValueError(
-#         f"Unsupported Optuna storage backend '{backend}'. Use journal, sqlite, "
-#         "or provide optuna.storage.url / OPTUNA_STORAGE_URL."
-#     )
 
 def _storage(search_cfg: dict[str, Any], algorithm_root: Path):
     """Build Optuna storage.
@@ -261,13 +221,7 @@ def _export_study(
         "error",
     ]
 
-    # all_fields = [
-    #     "trial_number", "state", "objective", "val_accuracy", "test_accuracy",
-    #     "macro_f1", "mean_local_loss", "cumulative_wall_time_sec",
-    #     "total_comm_bytes", "run_gpu_energy_measured_j",
-    #     "run_total_energy_hybrid_j", "termination_round", "stopping_reason",
-    #     "parameters_json", "output_dirs", "error",
-    # ]
+  
     with (algorithm_root / "optuna_trials.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=all_fields)
         writer.writeheader()
@@ -317,6 +271,9 @@ def _export_study(
         "unique_configurations_failed_only": stats["unique_failed_only"],
         "unique_configurations_retried": stats["unique_retried"],
         "total_terminal_trial_records": stats["total_terminal_trials"],
+        "infrastructure_interrupted_trials": stats["infrastructure_interrupted_trials"],
+        "running_trials": stats["running_trials"],
+        "waiting_retry_trials": stats["waiting_trials"],
 
         # Keep old fields for backward compatibility
         "completed_trials": len(complete),
@@ -344,28 +301,94 @@ def _export_study(
 
 
 
-    # summary = {
-    #     "status": "search_complete" if possible is not None and len(complete) >= possible else "search_in_progress",
-    #     "study_name": study.study_name,
-    #     "algorithm": algorithm,
-    #     "sampler": type(study.sampler).__name__,
-    #     "possible_configurations": possible,
-    #     "completed_trials": len(complete),
-    #     "failed_trials": sum(t.state == optuna.trial.TrialState.FAIL for t in study.trials),
-    #     "best_trial_number": best.number,
-    #     "best_observed_validation_accuracy": best.user_attrs.get("val_accuracy"),
-    #     "best_parameters": best_params,
-    #     "energy_policy": {
-    #         "role": "descriptive",
-    #         "ranking_use": False,
-    #         "primary_logged_quantity": "run_gpu_energy_measured_j",
-    #         "note": "Search-stage energy is reported as search cost only and is not used for algorithm energy ranking.",
-    #     },
-    # }
-
     (algorithm_root / "search_summary.json").write_text(
         json.dumps(summary, indent=2), encoding="utf-8"
     )
+
+
+def _recover_interrupted_running_trials(
+    study: optuna.Study,
+) -> int:
+    """
+    Recover trials left in RUNNING state after an interrupted worker.
+
+    Each stale RUNNING trial is:
+      1. tagged as an infrastructure interruption,
+      2. changed to FAIL,
+      3. re-enqueued with exactly the same hyperparameters.
+
+    IMPORTANT:
+    Use this only when there is at most one active worker for this
+    Optuna study. Otherwise a genuinely active RUNNING trial could
+    be incorrectly reclaimed.
+    """
+    running_trials = [
+        trial
+        for trial in study.trials
+        if trial.state == TrialState.RUNNING
+    ]
+
+    if not running_trials:
+        return 0
+
+    recovered = 0
+
+    for trial in running_trials:
+        params = dict(trial.params)
+
+        print(
+            f"[Optuna recovery] Found stale RUNNING trial "
+            f"#{trial.number}: {params}"
+        )
+
+        trial_id = trial._trial_id
+
+        # Record why this trial is being terminated.
+        study._storage.set_trial_user_attr(
+            trial_id,
+            "run_status",
+            "interrupted",
+        )
+        study._storage.set_trial_user_attr(
+            trial_id,
+            "failure_type",
+            "infrastructure_interruption",
+        )
+        study._storage.set_trial_user_attr(
+            trial_id,
+            "failure_message",
+            "Previous worker terminated while trial was RUNNING.",
+        )
+        study._storage.set_trial_user_attr(
+            trial_id,
+            "retry_required",
+            True,
+        )
+
+        # Close the stale RUNNING trial.
+        study._storage.set_trial_state_values(
+            trial_id,
+            TrialState.FAIL,
+        )
+
+        # Retry exactly the same hyperparameter configuration.
+        study.enqueue_trial(
+            params,
+            user_attrs={
+                "retry_of_trial": trial.number,
+                "retry_reason": "infrastructure_interruption",
+            },
+            skip_if_exists=False,
+        )
+
+        print(
+            f"[Optuna recovery] Trial #{trial.number} marked as "
+            f"interrupted and re-enqueued."
+        )
+
+        recovered += 1
+
+    return recovered
 
 
 def run_optuna_search_from_dicts(
@@ -413,6 +436,32 @@ def run_optuna_search_from_dicts(
         direction=_selection_direction(search_cfg),
         load_if_exists=True,
     )
+
+    recover_interrupted = bool(
+        search_cfg.get("optuna", {}).get(
+            "recover_interrupted_trials",
+            False,
+        )
+    )
+
+    if recover_interrupted:
+        recovered_trials = _recover_interrupted_running_trials(
+            study
+        )
+
+        if recovered_trials:
+            print(
+                f"[Optuna recovery] Re-enqueued "
+                f"{recovered_trials} interrupted trial(s)."
+            )
+
+    # recovered_trials = _recover_interrupted_running_trials(study)
+
+    # if recovered_trials:
+    #     print(
+    #         f"[Optuna recovery] Re-enqueued "
+    #         f"{recovered_trials} interrupted trial(s)."
+    #     )
 
     space = effective_search_space(search_cfg, algorithm)
     metric_name = _metric_name(search_cfg)
@@ -563,30 +612,43 @@ def _trial_parameter_key(trial: optuna.trial.FrozenTrial) -> str:
     )
 
 
-
 def _evaluated_configuration_stats(
     study: optuna.Study,
 ) -> dict[str, Any]:
     """
-    Summarize unique configurations represented by terminal Optuna trials.
+    Summarize unique configurations that received a valid evaluation.
 
-    COMPLETE trials are successful evaluations.
-    FAIL trials are retained as attempted configurations. This is important
-    for configurations that genuinely diverged, e.g. non-finite local loss.
-    Duplicate/re-evaluated trials do not increase the unique count.
+    COMPLETE trials count as evaluated.
+
+    FAIL trials count only when the failure represents an actual outcome of
+    the configuration, e.g. numerical divergence.
+
+    Infrastructure-interrupted trials are excluded because their parameter
+    configuration must be retried.
     """
-    terminal_trials = [
-        trial
-        for trial in study.trials
-        if trial.state in {
-            TrialState.COMPLETE,
-            TrialState.FAIL,
-        }
-    ]
+
+    valid_terminal_trials = []
+
+    for trial in study.trials:
+
+        if trial.state == TrialState.COMPLETE:
+            valid_terminal_trials.append(trial)
+            continue
+
+        if trial.state == TrialState.FAIL:
+            failure_type = str(
+                trial.user_attrs.get("failure_type", "")
+            )
+
+            # Infrastructure failures do NOT constitute evaluation.
+            if failure_type == "infrastructure_interruption":
+                continue
+
+            valid_terminal_trials.append(trial)
 
     by_configuration: dict[str, list[Any]] = {}
 
-    for trial in terminal_trials:
+    for trial in valid_terminal_trials:
         key = _trial_parameter_key(trial)
         by_configuration.setdefault(key, []).append(trial)
 
@@ -609,11 +671,85 @@ def _evaluated_configuration_stats(
         if len(trials) > 1:
             unique_retried.add(key)
 
+    infrastructure_interrupted = sum(
+        trial.state == TrialState.FAIL
+        and trial.user_attrs.get("failure_type")
+        == "infrastructure_interruption"
+        for trial in study.trials
+    )
+
+    running_trials = sum(
+        trial.state == TrialState.RUNNING
+        for trial in study.trials
+    )
+
+    waiting_trials = sum(
+        trial.state == TrialState.WAITING
+        for trial in study.trials
+    )
+
     return {
         "unique_attempted": len(by_configuration),
         "unique_successful": len(unique_successful),
         "unique_failed_only": len(unique_failed_only),
         "unique_retried": len(unique_retried),
-        "total_terminal_trials": len(terminal_trials),
+        "total_terminal_trials": len(valid_terminal_trials),
+        "infrastructure_interrupted_trials": infrastructure_interrupted,
+        "running_trials": running_trials,
+        "waiting_trials": waiting_trials,
     }
+
+
+# def _evaluated_configuration_stats(
+#     study: optuna.Study,
+# ) -> dict[str, Any]:
+#     """
+#     Summarize unique configurations represented by terminal Optuna trials.
+
+#     COMPLETE trials are successful evaluations.
+#     FAIL trials are retained as attempted configurations. This is important
+#     for configurations that genuinely diverged, e.g. non-finite local loss.
+#     Duplicate/re-evaluated trials do not increase the unique count.
+#     """
+#     terminal_trials = [
+#         trial
+#         for trial in study.trials
+#         if trial.state in {
+#             TrialState.COMPLETE,
+#             TrialState.FAIL,
+#         }
+#     ]
+
+#     by_configuration: dict[str, list[Any]] = {}
+
+#     for trial in terminal_trials:
+#         key = _trial_parameter_key(trial)
+#         by_configuration.setdefault(key, []).append(trial)
+
+#     unique_successful = set()
+#     unique_failed_only = set()
+#     unique_retried = set()
+
+#     for key, trials in by_configuration.items():
+#         states = {trial.state for trial in trials}
+
+#         if TrialState.COMPLETE in states:
+#             unique_successful.add(key)
+
+#         if (
+#             TrialState.FAIL in states
+#             and TrialState.COMPLETE not in states
+#         ):
+#             unique_failed_only.add(key)
+
+#         if len(trials) > 1:
+#             unique_retried.add(key)
+
+#     return {
+#         "unique_attempted": len(by_configuration),
+#         "unique_successful": len(unique_successful),
+#         "unique_failed_only": len(unique_failed_only),
+#         "unique_retried": len(unique_retried),
+#         "total_terminal_trials": len(terminal_trials),
+#     }
 
