@@ -145,6 +145,21 @@ def run_experiment(cfg):
 
     device = device_of(cfg['experiment']['device'])
     save_json(system_metadata(device), output_dir / 'system_metadata.json')
+    experiment_role = str(
+        cfg.get("experiment", {}).get("role", "search")
+    ).lower()
+
+    evaluate_test = bool(
+        cfg.get("evaluation", {}).get(
+            "evaluate_test",
+            False,
+        )
+    )
+
+    if experiment_role == "search" and evaluate_test:
+        raise ValueError(
+            "Test evaluation must be disabled during configuration search."
+        )
 
     try:
         # ------------------------ Data and model setup ------------------------
@@ -220,9 +235,9 @@ def run_experiment(cfg):
         # stopping condition.  The normal exit is validation convergence.
         maximum_rounds = int(cfg['federation']['communication_rounds'])
         eval_frequency = int(cfg['evaluation'].get('frequency', 1))
-        evaluate_test = bool(
-            cfg.get("evaluation", {}).get("evaluate_test", False)
-        )
+        # evaluate_test = bool(
+        #     cfg.get("evaluation", {}).get("evaluate_test", False)
+        # )
 
         start_round = 1
         elapsed_before = 0.0
