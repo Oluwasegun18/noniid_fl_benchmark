@@ -2,7 +2,7 @@
 #SBATCH --job-name=fl_confirm
 #SBATCH --output=logs/confirm_%A_%a.out
 #SBATCH --error=logs/confirm_%A_%a.err
-#SBATCH --array=0-23%1
+#SBATCH --array=0-7%1
 #SBATCH --time=168:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G

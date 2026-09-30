@@ -183,13 +183,23 @@ def run_experiment(cfg):
             workers,
             torch.Generator().manual_seed(seed),
         )
-        test_loader = make_loader(
-            bundle.test_dataset,
-            batch,
-            False,
-            workers,
-            torch.Generator().manual_seed(seed),
-        )
+        test_loader = None
+
+        if evaluate_test:
+            test_loader = make_loader(
+                bundle.test_dataset,
+                batch,
+                False,
+                workers,
+                torch.Generator().manual_seed(seed),
+            )
+        # test_loader = make_loader(
+        #     bundle.test_dataset,
+        #     batch,
+        #     False,
+        #     workers,
+        #     torch.Generator().manual_seed(seed),
+        # )
 
         torch.manual_seed(int(cfg['model']['initialization_seed']))
         global_model = build_model(cfg, bundle).to(device)
@@ -210,6 +220,9 @@ def run_experiment(cfg):
         # stopping condition.  The normal exit is validation convergence.
         maximum_rounds = int(cfg['federation']['communication_rounds'])
         eval_frequency = int(cfg['evaluation'].get('frequency', 1))
+        evaluate_test = bool(
+            cfg.get("evaluation", {}).get("evaluate_test", False)
+        )
 
         start_round = 1
         elapsed_before = 0.0
@@ -251,6 +264,17 @@ def run_experiment(cfg):
             cfg.get('resources', {}).get('energy', {}).get('gpu_warmup_steps', 2)
         )
         _warmup_accelerator(global_model, validation_loader, device, warmup_steps)
+
+
+        # ---------------------------------------------------------
+        # Reset CUDA peak-memory statistics after model/data setup
+        # and warm-up so the reported peak corresponds to the
+        # actual measured training run.
+        # ---------------------------------------------------------
+        if device.type == "cuda" and torch.cuda.is_available():
+            torch.cuda.synchronize(device)
+            torch.cuda.reset_peak_memory_stats(device)
+
         run_energy_tracker = EnergyTracker(cfg, device, phase='full_training_run')
         run_energy_tracker.start()
 
@@ -332,16 +356,22 @@ def run_experiment(cfg):
                 # selector never uses them.  The final reported test metric is
                 # recomputed after restoring the best-validation model.
                 val = evaluate(global_model, validation_loader, device)
-                test = evaluate(global_model, test_loader, device)
+                # test = evaluate(global_model, test_loader, device)
+                test = None
+                if evaluate_test:
+                    test = evaluate(global_model, test_loader, device)
 
                 evaluation_time = time.perf_counter() - evaluation_start
                 evaluation_energy = evaluation_tracker.stop()
                 last_eval = {
                     'val_loss': val['loss'],
                     'val_accuracy': val['accuracy'],
-                    'test_loss': test['loss'],
-                    'test_accuracy': test['accuracy'],
-                    'macro_f1': test['macro_f1'],
+                    'test_loss': (None if test is None else test['loss']),
+                    'test_accuracy': (None if test is None else test['accuracy']),
+                    'macro_f1': ( None if test is None else test['macro_f1']),
+                    # 'test_loss': test['loss'],
+                    # 'test_accuracy': test['accuracy'],
+                    # 'macro_f1': test['macro_f1'],
                 }
 
             elapsed = time.perf_counter() - experiment_start
@@ -372,15 +402,20 @@ def run_experiment(cfg):
                 evaluation_tracker.start()
                 evaluation_start = time.perf_counter()
                 val = evaluate(global_model, validation_loader, device)
-                test = evaluate(global_model, test_loader, device)
+                test_loader = None
+                if evaluate_test:
+                    test = evaluate(global_model, test_loader, device)
                 evaluation_time = time.perf_counter() - evaluation_start
                 evaluation_energy = evaluation_tracker.stop()
                 last_eval = {
                     'val_loss': val['loss'],
                     'val_accuracy': val['accuracy'],
-                    'test_loss': test['loss'],
-                    'test_accuracy': test['accuracy'],
-                    'macro_f1': test['macro_f1'],
+                    'test_loss': (None if test is None else test['loss']),
+                    'test_accuracy': (None if test is None else test['accuracy']),
+                    'macro_f1': ( None if test is None else test['macro_f1']),
+                    # 'test_loss': test['loss'],
+                    # 'test_accuracy': test['accuracy'],
+                    # 'macro_f1': test['macro_f1'],
                 }
                 should_evaluate = True
 
@@ -499,6 +534,23 @@ def run_experiment(cfg):
         # validation performed during convergence monitoring.
         run_energy = run_energy_tracker.stop()
 
+        # ---------------------------------------------------------
+        # Peak CUDA memory over the measured training interval
+        # ---------------------------------------------------------
+        peak_gpu_memory_allocated_bytes = None
+        peak_gpu_memory_reserved_bytes = None
+
+        if device.type == "cuda" and torch.cuda.is_available():
+            torch.cuda.synchronize(device)
+
+            peak_gpu_memory_allocated_bytes = int(
+                torch.cuda.max_memory_allocated(device)
+            )
+
+            peak_gpu_memory_reserved_bytes = int(
+                torch.cuda.max_memory_reserved(device)
+            )
+
         # -------------------- Final best-model confirmation ------------------
         # Restore the best validation model before producing the final summary.
         # This is especially important when patience allows several plateau
@@ -513,7 +565,9 @@ def run_experiment(cfg):
             best_validation_accuracy = final_row.get('val_accuracy')
 
         final_val = evaluate(global_model, validation_loader, device)
-        final_test = evaluate(global_model, test_loader, device)
+        final_test = None
+        if evaluate_test:
+            final_test = evaluate(global_model, test_loader, device)
 
         summary = {
             'status': 'completed',
@@ -522,9 +576,9 @@ def run_experiment(cfg):
             # validation point and confirmation reports its associated test.
             'val_loss': final_val['loss'],
             'val_accuracy': final_val['accuracy'],
-            'test_loss': final_test['loss'],
-            'test_accuracy': final_test['accuracy'],
-            'macro_f1': final_test['macro_f1'],
+            'test_loss': ( None if final_test is None else final_test['loss']),
+            'test_accuracy': ( None if final_test is None else final_test['accuracy']),
+            'macro_f1': ( None if final_test is None else final_test['macro_f1']),
             'best_validation_round': best_validation_round,
             'best_validation_accuracy': best_validation_accuracy,
             'termination_round': int(final_row.get('round', 0)),
@@ -533,6 +587,22 @@ def run_experiment(cfg):
             # deltas. ``run_energy_primary_j`` is measured GPU energy only;
             # the hybrid value is retained descriptively and is not the primary
             # ranking quantity.
+
+             # GPU memory measured by the PyTorch CUDA allocator.
+            'peak_gpu_memory_allocated_bytes': peak_gpu_memory_allocated_bytes,
+            'peak_gpu_memory_reserved_bytes': peak_gpu_memory_reserved_bytes,
+            'peak_gpu_memory_allocated_mib': (
+                None
+                if peak_gpu_memory_allocated_bytes is None
+                else peak_gpu_memory_allocated_bytes / (1024 ** 2)
+            ),
+
+            'peak_gpu_memory_reserved_mib': (
+                None
+                if peak_gpu_memory_reserved_bytes is None
+                else peak_gpu_memory_reserved_bytes / (1024 ** 2)
+            ),
+
             'run_energy_primary_j': run_energy.gpu_energy_primary_j,
             'run_gpu_energy_measured_j': run_energy.gpu_energy_measured_j,
             'run_cpu_energy_measured_j': run_energy.cpu_energy_measured_j,

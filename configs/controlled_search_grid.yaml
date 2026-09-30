@@ -4,6 +4,8 @@
 # Convergence is based on a smoothed validation-accuracy plateau; raw validation accuracy still selects the saved best model.
 
 output_dir: search_outputs
+experiment:
+  role: search
 algorithms:
 - fedavg
 - fedprox
@@ -97,6 +99,8 @@ termination:
   max_search_rounds: 500
   max_confirmation_rounds: 500
   smoothing_window: 3
+evaluation:
+  evaluate_test: false
 budget:
   search_seeds:
   - 42

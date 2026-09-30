@@ -15,14 +15,42 @@ from .search_runner import _prepare_run_config
 
 
 def _write_confirmation_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+
     fields = [
-        "algorithm", "seed", "trial", "status", "test_accuracy", "macro_f1",
-        "termination_round", "cumulative_wall_time_sec", "total_comm_bytes",
-        "run_energy_primary_j", "run_gpu_energy_measured_j",
-        "run_total_energy_hybrid_j", "run_energy_valid_for_ranking",
-        "run_energy_invalid_reason", "run_gpu_counter_scope", "run_gpu_uuid",
-        "run_concurrent_gpu_processes_detected", "output_dir", "error",
-    ]
+    "algorithm",
+    "seed",
+    "trial",
+    "status",
+    "test_accuracy",
+    "macro_f1",
+    "termination_round",
+    "cumulative_wall_time_sec",
+    "total_comm_bytes",
+
+    "peak_gpu_memory_allocated_bytes",
+    "peak_gpu_memory_reserved_bytes",
+    "peak_gpu_memory_allocated_mib",
+    "peak_gpu_memory_reserved_mib",
+
+    "run_energy_primary_j",
+    "run_gpu_energy_measured_j",
+    "run_total_energy_hybrid_j",
+    "run_energy_valid_for_ranking",
+    "run_energy_invalid_reason",
+    "run_gpu_counter_scope",
+    "run_gpu_uuid",
+    "run_concurrent_gpu_processes_detected",
+    "output_dir",
+    "error",
+]
+    # fields = [
+    #     "algorithm", "seed", "trial", "status", "test_accuracy", "macro_f1",
+    #     "termination_round", "cumulative_wall_time_sec", "total_comm_bytes",
+    #     "run_energy_primary_j", "run_gpu_energy_measured_j",
+    #     "run_total_energy_hybrid_j", "run_energy_valid_for_ranking",
+    #     "run_energy_invalid_reason", "run_gpu_counter_scope", "run_gpu_uuid",
+    #     "run_concurrent_gpu_processes_detected", "output_dir", "error",
+    # ]
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
@@ -48,9 +76,15 @@ def run_confirmation_from_dicts(
         )
     parameters = yaml.safe_load(params_path.read_text(encoding="utf-8")) or {}
 
+    print(
+        f"[Confirmation] Algorithm: {algorithm}\n"
+        f"[Confirmation] Selected parameters: {parameters}\n"
+        f"[Confirmation] Seeds: {seeds}"
+    )
+
     budget_cfg = search_cfg.get("budget", {})
     if seeds is None:
-        seeds = [int(v) for v in budget_cfg.get("confirmation_seeds", [11, 22, 33])]
+        seeds = [int(v) for v in budget_cfg.get("confirmation_seeds", [11, 22, 33, 44, 55])]
     termination_cfg = search_cfg.get("termination", {})
     rounds = int(
         termination_cfg.get("max_confirmation_rounds", budget_cfg.get("rounds_per_confirmation_run", 1000))
@@ -60,12 +94,63 @@ def run_confirmation_from_dicts(
     confirmation_root = algorithm_root / "confirmation_runs"
     confirmation_root.mkdir(parents=True, exist_ok=True)
 
+    print(
+        f"[Confirmation] algorithm={algorithm}"
+    )
+    print(
+        f"[Confirmation] parameters={parameters}"
+    )
+    print(
+        f"[Confirmation] seeds={seeds}"
+    )
+
     for trial_index, seed in enumerate(seeds, start=1):
         run_dir = confirmation_root / f"t{trial_index}_s{seed}"
+
+        summary_path = run_dir / "summary.json"
+
+        # Resume-safe behavior:
+        # if this seed already completed successfully, reuse its result.
+        if summary_path.exists():
+            try:
+                existing_summary = json.loads(
+                    summary_path.read_text(encoding="utf-8")
+                )
+
+                rows.append({
+                    "algorithm": algorithm,
+                    "seed": seed,
+                    "trial": trial_index,
+                    "status": "completed",
+                    "output_dir": str(run_dir),
+                    **existing_summary,
+                })
+
+                print(
+                    f"[Confirmation] Seed {seed} already completed. "
+                    f"Skipping rerun."
+                )
+                continue
+
+            except Exception as exc:
+                print(
+                    f"[Confirmation] Existing summary for seed {seed} "
+                    f"could not be read ({exc}). Rerunning."
+                )
+
+        elif run_dir.exists():
+
+            print(
+                f"[Confirmation] seed={seed} has an "
+                f"incomplete previous run; restarting."
+            )
+
         cfg = _prepare_run_config(
             deepcopy(base), algorithm, f"confirmation_t{trial_index}_s{seed}",
             parameters, int(seed), rounds, run_dir, termination_cfg,
         )
+        cfg.setdefault("evaluation",{},)["evaluate_test"] = True
+        cfg.setdefault("experiment",{},)["role"] = "confirmation"
         cfg["experiment"]["trial"] = trial_index
         energy_cfg = cfg.setdefault("resources", {}).setdefault("energy", {})
         energy_cfg["role"] = "ranking"
@@ -116,10 +201,21 @@ def run_confirmation_from_dicts(
     runtime_mean, runtime_std = stats(completed, "cumulative_wall_time_sec")
     energy_mean, energy_std = stats(energy_valid, "run_energy_primary_j")
     hybrid_mean, hybrid_std = stats(completed, "run_total_energy_hybrid_j")
+    f1_mean, f1_std = stats(  completed, "macro_f1",)
+    round_mean, round_std = stats(completed, "termination_round",)
+    comm_mean, comm_std = stats(completed, "total_comm_bytes",)
+    memory_alloc_mean, memory_alloc_std = stats( completed, "peak_gpu_memory_allocated_mib",)
+    memory_reserved_mean, memory_reserved_std = stats(completed, "peak_gpu_memory_reserved_mib",)
+    if len(completed) == len(seeds):
+        overall_status = "completed"
+    elif completed:
+        overall_status = "partial"
+    else:
+        overall_status = "failed"
 
     summary = {
         "algorithm": algorithm,
-        "status": "completed" if completed else "failed",
+        "status": overall_status,
         "best_parameters": parameters,
         "confirmation_trials_requested": len(seeds),
         "confirmation_trials_completed": len(completed),
@@ -127,6 +223,17 @@ def run_confirmation_from_dicts(
         "test_accuracy_std": acc_std,
         "runtime_sec_mean": runtime_mean,
         "runtime_sec_std": runtime_std,
+        "macro_f1_mean": f1_mean,
+        "macro_f1_std": f1_std,
+        "termination_round_mean": round_mean,
+        "termination_round_std": round_std,
+        "total_comm_bytes_mean": comm_mean,
+        "total_comm_bytes_std": comm_std,
+        "peak_gpu_memory_allocated_mib_mean": memory_alloc_mean,
+        "peak_gpu_memory_allocated_mib_std": memory_alloc_std,
+        "peak_gpu_memory_reserved_mib_mean": memory_reserved_mean,
+        "peak_gpu_memory_reserved_mib_std": memory_reserved_std,
+
         "energy_ranking_policy": {
             "primary_metric": "measured GPU energy over full training run",
             "field": "run_energy_primary_j",
@@ -139,7 +246,11 @@ def run_confirmation_from_dicts(
         "gpu_energy_measured_j_std_valid_only": energy_std,
         "hybrid_energy_j_mean_descriptive_only": hybrid_mean,
         "hybrid_energy_j_std_descriptive_only": hybrid_std,
-        "energy_ranking_ready": len(energy_valid) == len(completed) and len(completed) > 0,
+        "energy_ranking_ready": (
+            len(completed) == len(seeds)
+            and len(energy_valid) == len(seeds)
+        ),
+        # "energy_ranking_ready": len(energy_valid) == len(completed) and len(completed) > 0,
     }
     (algorithm_root / "confirmation_summary.json").write_text(
         json.dumps(summary, indent=2), encoding="utf-8"
