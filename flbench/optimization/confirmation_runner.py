@@ -149,6 +149,7 @@ def run_confirmation_from_dicts(
             deepcopy(base), algorithm, f"confirmation_t{trial_index}_s{seed}",
             parameters, int(seed), rounds, run_dir, termination_cfg,
         )
+        cfg.setdefault("experiment", {})["device"] = "cuda"
         cfg.setdefault("evaluation",{},)["evaluate_test"] = True
         cfg.setdefault("experiment",{},)["role"] = "confirmation"
         cfg["experiment"]["trial"] = trial_index

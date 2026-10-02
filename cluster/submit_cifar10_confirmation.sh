@@ -19,6 +19,30 @@ module load cuda/12.8/default
 PROJECT_DIR="${PROJECT_DIR:-${SLURM_SUBMIT_DIR}}"
 cd "$PROJECT_DIR"
 
+echo "=================================================="
+echo "Confirmation GPU check"
+echo "Node: $(hostname)"
+echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
+echo "=================================================="
+
+nvidia-smi
+
+python - <<'PY'
+import torch
+
+print("PyTorch version:", torch.__version__)
+print("CUDA available:", torch.cuda.is_available())
+print("CUDA device count:", torch.cuda.device_count())
+
+if not torch.cuda.is_available():
+    raise SystemExit(
+        "ERROR: CUDA unavailable. Confirmation cannot continue."
+    )
+
+print("GPU:", torch.cuda.get_device_name(0))
+PY
+
+
 read -r DATASET CASE ALGORITHM < <(
   python run_case_index.py --dataset cifar10 --index "${SLURM_ARRAY_TASK_ID}"
 )

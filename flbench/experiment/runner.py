@@ -144,6 +144,20 @@ def run_experiment(cfg):
     save_json({'status': 'running', 'experiment_id': eid}, output_dir / 'status.json')
 
     device = device_of(cfg['experiment']['device'])
+
+    if (
+        cfg.get("experiment", {}).get("role") == "confirmation"
+        and device.type != "cuda"
+    ):
+        raise RuntimeError(
+            "Confirmation runs require CUDA, but no CUDA device was selected."
+        )
+
+    if device.type == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA was requested, but torch.cuda.is_available() is False."
+        )
+
     save_json(system_metadata(device), output_dir / 'system_metadata.json')
     experiment_role = str(
         cfg.get("experiment", {}).get("role", "search")
