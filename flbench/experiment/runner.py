@@ -145,6 +145,7 @@ def run_experiment(cfg):
 
     device = device_of(cfg['experiment']['device'])
 
+    # incase i want to decided to change the plan and run the confrimation on a CPU, i will need the adjust this condition
     if (
         cfg.get("experiment", {}).get("role") == "confirmation"
         and device.type != "cuda"
@@ -157,6 +158,7 @@ def run_experiment(cfg):
         raise RuntimeError(
             "CUDA was requested, but torch.cuda.is_available() is False."
         )
+
 
     save_json(system_metadata(device), output_dir / 'system_metadata.json')
     experiment_role = str(
