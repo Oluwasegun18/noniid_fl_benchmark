@@ -2,7 +2,7 @@
 #SBATCH --job-name=c100_optuna
 #SBATCH --output=logs/cifar100_optuna_%A_%a.out
 #SBATCH --error=logs/cifar100_optuna_%A_%a.err
-#SBATCH --array=0-23%4
+#SBATCH --array=0-23%2
 #SBATCH --time=168:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
