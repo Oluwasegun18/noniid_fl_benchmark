@@ -93,7 +93,11 @@ def _storage(search_cfg: dict[str, Any], algorithm_root: Path):
 
     if backend == "journal":
         from optuna.storages import JournalStorage
-        from optuna.storages.journal import JournalFileBackend
+        # from optuna.storages.journal import JournalFileBackend
+        from optuna.storages.journal import (
+                JournalFileBackend,
+                JournalFileOpenLock,
+            )
 
         configured = cfg.get("path")
 
@@ -110,6 +114,21 @@ def _storage(search_cfg: dict[str, Any], algorithm_root: Path):
 
         path = path.resolve()
         path.parent.mkdir(parents=True, exist_ok=True)
+
+        path_str = str(path)
+        if path_str.startswith("/content/drive/"):
+            print("[Optuna storage] Google Drive detected: using JournalFileOpenLock")
+
+            lock = JournalFileOpenLock(path_str)
+
+            return JournalStorage(
+                JournalFileBackend(
+                    path_str,
+                    lock_obj=lock,
+                )
+            )
+
+        print("[Optuna storage] using default journal lock")
 
         return JournalStorage(
             JournalFileBackend(str(path))
