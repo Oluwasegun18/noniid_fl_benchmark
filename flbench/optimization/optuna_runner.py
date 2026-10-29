@@ -491,6 +491,82 @@ def _recover_interrupted_running_trials(
 
     return recovered
 
+def _reclassify_historical_infrastructure_failures(
+    study: optuna.Study,
+) -> int:
+    """
+    Reclassify old FAIL trials that were caused by infrastructure issues
+    before the newer failure classifier was added.
+
+    COMPLETE trials are never modified.
+    """
+    updated = 0
+
+    infrastructure_patterns = [
+        "no kernel image is available for execution on the device",
+        "cuda driver",
+        "cuda gpu is not available",
+        "cuda unavailable",
+    ]
+
+    for trial in study.trials:
+        if trial.state != TrialState.FAIL:
+            continue
+
+        current_type = str(
+            trial.user_attrs.get("failure_type", "")
+        )
+
+        if current_type == "infrastructure_interruption":
+            continue
+
+        failure_message = str(
+            trial.user_attrs.get(
+                "failure_message",
+                trial.user_attrs.get("error", ""),
+            )
+        ).lower()
+
+        if not any(
+            pattern in failure_message
+            for pattern in infrastructure_patterns
+        ):
+            continue
+
+        trial_id = trial._trial_id
+
+        study._storage.set_trial_user_attr(
+            trial_id,
+            "original_failure_type",
+            current_type,
+        )
+
+        study._storage.set_trial_user_attr(
+            trial_id,
+            "failure_type",
+            "infrastructure_interruption",
+        )
+
+        study._storage.set_trial_user_attr(
+            trial_id,
+            "run_status",
+            "interrupted",
+        )
+
+        study._storage.set_trial_user_attr(
+            trial_id,
+            "retry_required",
+            True,
+        )
+
+        print(
+            f"[Optuna migration] Trial #{trial.number}: "
+            f"{current_type!r} -> infrastructure_interruption"
+        )
+
+        updated += 1
+
+    return updated
 
 def run_optuna_search_from_dicts(
     base: dict[str, Any],
@@ -538,8 +614,22 @@ def run_optuna_search_from_dicts(
         load_if_exists=True,
     )
 
-    # Re-enqueue configurations that previously failed because of
-    # infrastructure problems (GPU incompatibility, unavailable CUDA, etc.).
+    # --------------------------------------------------
+    # Repair historical infrastructure failures first.
+    # --------------------------------------------------
+    reclassified = _reclassify_historical_infrastructure_failures(
+        study
+    )
+
+    if reclassified:
+        print(
+            f"[Optuna migration] Reclassified "
+            f"{reclassified} historical infrastructure failure(s)."
+        )
+
+    # --------------------------------------------------
+    # Requeue infrastructure-failed configurations.
+    # --------------------------------------------------
     _reenqueue_infrastructure_failures(study)
 
     recover_interrupted = bool(
