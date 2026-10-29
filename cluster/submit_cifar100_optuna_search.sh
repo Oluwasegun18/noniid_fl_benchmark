@@ -6,7 +6,7 @@
 #SBATCH --time=168:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --partition=ps,p6,pi,pt,hip,cl,pa
+#SBATCH --partition=ps,p6,pi,pt,cl,pa
 #SBATCH --exclude=antenna[1-3],xailab,
 #SBATCH --gres=gpu:1
 
