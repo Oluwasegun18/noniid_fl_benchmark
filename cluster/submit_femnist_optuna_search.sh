@@ -6,8 +6,8 @@
 #SBATCH --time=168:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --partition=pt,ps,pi
-#SBATCH --exclude=antenna[1-3]
+#SBATCH --partition=ps
+#SBATCH --exclude=antenna[1-3],xailab,edmonds,gomory,matrix,nemhauser,salus,stellar,wolsey,cowansville
 #SBATCH --gres=gpu:1
 
 set -euo pipefail
