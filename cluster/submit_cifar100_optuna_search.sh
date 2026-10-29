@@ -8,6 +8,8 @@
 #SBATCH --mem=32G
 #SBATCH --partition=ps
 #SBATCH --exclude=antenna2
+#SBATCH --exclude=antenna3
+#SBATCH --exclude=antenna1
 #SBATCH --gres=gpu:1
 
 set -euo pipefail
