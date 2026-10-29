@@ -16,6 +16,9 @@ module purge
 module load python/3.12.0/default
 module load cuda/12.8/default
 
+# Activate project environment
+source ~/venvs/noniid_fl/bin/activate
+
 PROJECT_DIR="${PROJECT_DIR:-${SLURM_SUBMIT_DIR}}"
 cd "$PROJECT_DIR"
 
@@ -30,14 +33,16 @@ echo "Array task: ${SLURM_ARRAY_TASK_ID}"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
 
 echo "========================================"
+echo "----- Python environment -----"
 
 which python
 python -V
+python -m pip --version
 
 echo "----- NVIDIA -----"
 nvidia-smi || true
 
-echo "----- PyTorch -----"
+echo "----- PyTorch / Optuna -----"
 python - <<'PY'
 import sys
 import optuna
