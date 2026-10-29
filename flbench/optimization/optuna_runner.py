@@ -45,19 +45,101 @@ def _scenario_root(search_cfg: dict[str, Any]) -> Path:
         / str(search_cfg.get("scenario_name", "controlled_search"))
     ).resolve()
 
-def classify_trial_failure(exc: Exception) -> str:
+def classify_trial_failure(exc):
     message = str(exc).lower()
 
-    if isinstance(exc, FloatingPointError):
-        return "diverged_nonfinite_loss"
+    infrastructure_patterns = [
+        "no kernel image is available for execution on the device",
+        "cuda driver",
+        "cuda gpu is not available",
+        "cuda unavailable",
+    ]
+
+    if any(pattern in message for pattern in infrastructure_patterns):
+        return "infrastructure_interruption"
+
+    numerical_patterns = [
+        "non-finite",
+        "nan",
+        "infinite loss",
+        "inf loss",
+    ]
+
+    if any(pattern in message for pattern in numerical_patterns):
+        return "numerical_divergence"
 
     if "out of memory" in message:
-        return "cuda_oom"
+        return "resource_exhaustion"
+
+    if isinstance(exc, FloatingPointError):
+            return "diverged_nonfinite_loss"
 
     if isinstance(exc, RuntimeError):
         return "runtime_error"
 
-    return "unknown_failure"
+    return "infrastructure_interruption"
+
+def _reenqueue_infrastructure_failures(study):
+    """Requeue configurations that failed only because of infrastructure."""
+
+    completed_keys = {
+        _trial_parameter_key(t)
+        for t in study.trials
+        if t.state == TrialState.COMPLETE
+    }
+
+    already_queued = {
+        _trial_parameter_key(t)
+        for t in study.trials
+        if t.state in {
+            TrialState.WAITING,
+            TrialState.RUNNING,
+        }
+    }
+
+    requeued = set()
+
+    for trial in study.trials:
+        if trial.state != TrialState.FAIL:
+            continue
+
+        if trial.user_attrs.get("failure_type") != "infrastructure_interruption":
+            continue
+
+        key = _trial_parameter_key(trial)
+
+        # Do not rerun if this configuration subsequently completed.
+        if key in completed_keys:
+            continue
+
+        # Avoid enqueuing the same failed configuration repeatedly.
+        if key in already_queued or key in requeued:
+            continue
+
+        if not trial.params:
+            continue
+
+        print(
+            f"[Optuna recovery] Re-enqueueing infrastructure-failed "
+            f"trial {trial.number}: {trial.params}"
+        )
+
+        study.enqueue_trial(dict(trial.params))
+        requeued.add(key)
+
+# def classify_trial_failure(exc: Exception) -> str:
+#     message = str(exc).lower()
+
+#     if isinstance(exc, FloatingPointError):
+#         return "diverged_nonfinite_loss"
+
+#     if "out of memory" in message:
+#         return "cuda_oom"
+
+#     if isinstance(exc, RuntimeError):
+#         return "runtime_error"
+
+#     return "unknown_failure"
 
 
 def _storage(search_cfg: dict[str, Any], algorithm_root: Path):
@@ -455,6 +537,10 @@ def run_optuna_search_from_dicts(
         direction=_selection_direction(search_cfg),
         load_if_exists=True,
     )
+
+    # Re-enqueue configurations that previously failed because of
+    # infrastructure problems (GPU incompatibility, unavailable CUDA, etc.).
+    _reenqueue_infrastructure_failures(study)
 
     recover_interrupted = bool(
         search_cfg.get("optuna", {}).get(
