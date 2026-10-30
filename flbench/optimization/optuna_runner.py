@@ -923,14 +923,14 @@ def _trial_parameter_key(
 
 
 
-def _trial_parameter_key(trial: optuna.trial.FrozenTrial) -> str:
-    """Canonical key used to identify one unique hyperparameter configuration."""
-    return json.dumps(
-        trial.params,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
+# def _trial_parameter_key(trial: optuna.trial.FrozenTrial) -> str:
+#     """Canonical key used to identify one unique hyperparameter configuration."""
+#     return json.dumps(
+#         trial.params,
+#         sort_keys=True,
+#         separators=(",", ":"),
+#         default=str,
+#     )
 
 
 def _evaluated_configuration_stats(
