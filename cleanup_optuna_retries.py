@@ -17,7 +17,7 @@ SEARCH_CONFIG = "configs/controlled_search_grid.yaml"
 # True  -> only report what WOULD be changed
 # False -> actually cancel redundant WAITING trials
 # ---------------------------------------------------------
-DRY_RUN = True
+DRY_RUN = False
 
 
 ALGORITHMS = [
