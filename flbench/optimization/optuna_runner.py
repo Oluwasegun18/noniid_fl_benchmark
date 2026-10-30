@@ -98,12 +98,16 @@ def _reenqueue_infrastructure_failures(study):
     }
 
     requeued = set()
+    count = 0
 
     for trial in study.trials:
         if trial.state != TrialState.FAIL:
             continue
 
-        if trial.user_attrs.get("failure_type") != "infrastructure_interruption":
+        # if trial.user_attrs.get("failure_type") != "infrastructure_interruption":
+        #     continue
+
+        if not _is_infrastructure_failure(trial):
             continue
 
         key = _trial_parameter_key(trial)
@@ -126,6 +130,66 @@ def _reenqueue_infrastructure_failures(study):
 
         study.enqueue_trial(dict(trial.params))
         requeued.add(key)
+
+        study.enqueue_trial(
+            dict(trial.params),
+            user_attrs={
+                "retry_of_trial": trial.number,
+                "retry_reason": "infrastructure_interruption",
+            },
+            skip_if_exists=False,
+        )
+
+        requeued.add(key)
+        already_queued.add(key)
+        count += 1
+
+    return count
+
+
+def _is_infrastructure_failure(
+    trial: optuna.trial.FrozenTrial,
+) -> bool:
+    """
+    Return True when a failed trial represents an infrastructure problem.
+
+    Supports both:
+      - new trials explicitly tagged as infrastructure_interruption
+      - historical trials that were stored as runtime_error but whose
+        failure message clearly identifies an infrastructure problem
+    """
+
+    if trial.state != TrialState.FAIL:
+        return False
+
+    failure_type = str(
+        trial.user_attrs.get("failure_type", "")
+    ).lower()
+
+    if failure_type == "infrastructure_interruption":
+        return True
+
+    failure_message = str(
+        trial.user_attrs.get(
+            "failure_message",
+            trial.user_attrs.get("error", ""),
+        )
+    ).lower()
+
+    infrastructure_patterns = [
+        "no kernel image is available for execution on the device",
+        "cuda driver version is insufficient",
+        "cuda driver",
+        "cuda gpu is not available",
+        "cuda unavailable",
+        "cuda initialization error",
+    ]
+
+    return any(
+        pattern in failure_message
+        for pattern in infrastructure_patterns
+    )
+
 
 # def classify_trial_failure(exc: Exception) -> str:
 #     message = str(exc).lower()
@@ -491,82 +555,83 @@ def _recover_interrupted_running_trials(
 
     return recovered
 
-def _reclassify_historical_infrastructure_failures(
-    study: optuna.Study,
-) -> int:
-    """
-    Reclassify old FAIL trials that were caused by infrastructure issues
-    before the newer failure classifier was added.
+# def _reclassify_historical_infrastructure_failures(
+#     study: optuna.Study,
+# ) -> int:
+#     """
+#     Reclassify old FAIL trials that were caused by infrastructure issues
+#     before the newer failure classifier was added.
 
-    COMPLETE trials are never modified.
-    """
-    updated = 0
+#     COMPLETE trials are never modified.
+#     """
+#     updated = 0
 
-    infrastructure_patterns = [
-        "no kernel image is available for execution on the device",
-        "cuda driver",
-        "cuda gpu is not available",
-        "cuda unavailable",
-    ]
+#     infrastructure_patterns = [
+#         "no kernel image is available for execution on the device",
+#         "cuda driver",
+#         "cuda gpu is not available",
+#         "cuda unavailable",
+#     ]
 
-    for trial in study.trials:
-        if trial.state != TrialState.FAIL:
-            continue
+#     for trial in study.trials:
+#         if trial.state != TrialState.FAIL:
+#             continue
 
-        current_type = str(
-            trial.user_attrs.get("failure_type", "")
-        )
+#         current_type = str(
+#             trial.user_attrs.get("failure_type", "")
+#         )
 
-        if current_type == "infrastructure_interruption":
-            continue
+#         if current_type == "infrastructure_interruption":
+#             continue
 
-        failure_message = str(
-            trial.user_attrs.get(
-                "failure_message",
-                trial.user_attrs.get("error", ""),
-            )
-        ).lower()
+#         failure_message = str(
+#             trial.user_attrs.get(
+#                 "failure_message",
+#                 trial.user_attrs.get("error", ""),
+#             )
+#         ).lower()
 
-        if not any(
-            pattern in failure_message
-            for pattern in infrastructure_patterns
-        ):
-            continue
+#         if not any(
+#             pattern in failure_message
+#             for pattern in infrastructure_patterns
+#         ):
+#             continue
 
-        trial_id = trial._trial_id
+#         trial_id = trial._trial_id
 
-        study._storage.set_trial_user_attr(
-            trial_id,
-            "original_failure_type",
-            current_type,
-        )
+#         study._storage.set_trial_user_attr(
+#             trial_id,
+#             "original_failure_type",
+#             current_type,
+#         )
 
-        study._storage.set_trial_user_attr(
-            trial_id,
-            "failure_type",
-            "infrastructure_interruption",
-        )
+#         study._storage.set_trial_user_attr(
+#             trial_id,
+#             "failure_type",
+#             "infrastructure_interruption",
+#         )
 
-        study._storage.set_trial_user_attr(
-            trial_id,
-            "run_status",
-            "interrupted",
-        )
+#         study._storage.set_trial_user_attr(
+#             trial_id,
+#             "run_status",
+#             "interrupted",
+#         )
 
-        study._storage.set_trial_user_attr(
-            trial_id,
-            "retry_required",
-            True,
-        )
+#         study._storage.set_trial_user_attr(
+#             trial_id,
+#             "retry_required",
+#             True,
+#         )
 
-        print(
-            f"[Optuna migration] Trial #{trial.number}: "
-            f"{current_type!r} -> infrastructure_interruption"
-        )
+#         print(
+#             f"[Optuna migration] Trial #{trial.number}: "
+#             f"{current_type!r} -> infrastructure_interruption"
+#         )
 
-        updated += 1
+#         updated += 1
 
-    return updated
+#     return updated
+
 
 def run_optuna_search_from_dicts(
     base: dict[str, Any],
@@ -617,20 +682,29 @@ def run_optuna_search_from_dicts(
     # --------------------------------------------------
     # Repair historical infrastructure failures first.
     # --------------------------------------------------
-    reclassified = _reclassify_historical_infrastructure_failures(
-        study
-    )
+    # reclassified = _reclassify_historical_infrastructure_failures(
+    #     study
+    # )
 
-    if reclassified:
-        print(
-            f"[Optuna migration] Reclassified "
-            f"{reclassified} historical infrastructure failure(s)."
-        )
+    # if reclassified:
+    #     print(
+    #         f"[Optuna migration] Reclassified "
+    #         f"{reclassified} historical infrastructure failure(s)."
+    #     )
 
     # --------------------------------------------------
     # Requeue infrastructure-failed configurations.
     # --------------------------------------------------
-    _reenqueue_infrastructure_failures(study)
+
+    requeued = _reenqueue_infrastructure_failures(study)
+
+    if requeued:
+        print(
+            f"[Optuna recovery] Re-enqueued "
+            f"{requeued} infrastructure-failed configuration(s)."
+        )
+
+    # _reenqueue_infrastructure_failures(study)
 
     recover_interrupted = bool(
         search_cfg.get("optuna", {}).get(
@@ -831,15 +905,25 @@ def _evaluated_configuration_stats(
             continue
 
         if trial.state == TrialState.FAIL:
-            failure_type = str(
-                trial.user_attrs.get("failure_type", "")
-            )
 
-            # Infrastructure failures do NOT constitute evaluation.
-            if failure_type == "infrastructure_interruption":
+            # Infrastructure failures do NOT constitute an evaluation.
+            # This also recognizes historical runtime_error trials
+            # caused by known CUDA/infrastructure problems.
+            if _is_infrastructure_failure(trial):
                 continue
 
             valid_terminal_trials.append(trial)
+
+        # if trial.state == TrialState.FAIL:
+        #     failure_type = str(
+        #         trial.user_attrs.get("failure_type", "")
+        #     )
+
+        #     # Infrastructure failures do NOT constitute evaluation.
+        #     if failure_type == "infrastructure_interruption":
+        #         continue
+
+        #     valid_terminal_trials.append(trial)
 
     by_configuration: dict[str, list[Any]] = {}
 
@@ -866,12 +950,17 @@ def _evaluated_configuration_stats(
         if len(trials) > 1:
             unique_retried.add(key)
 
+    # infrastructure_interrupted = sum(
+    #     trial.state == TrialState.FAIL
+    #     and trial.user_attrs.get("failure_type")
+    #     == "infrastructure_interruption"
+    #     for trial in study.trials
+    # )
+
     infrastructure_interrupted = sum(
-        trial.state == TrialState.FAIL
-        and trial.user_attrs.get("failure_type")
-        == "infrastructure_interruption"
-        for trial in study.trials
-    )
+            _is_infrastructure_failure(trial)
+            for trial in study.trials
+        )
 
     running_trials = sum(
         trial.state == TrialState.RUNNING
@@ -893,58 +982,4 @@ def _evaluated_configuration_stats(
         "running_trials": running_trials,
         "waiting_trials": waiting_trials,
     }
-
-
-# def _evaluated_configuration_stats(
-#     study: optuna.Study,
-# ) -> dict[str, Any]:
-#     """
-#     Summarize unique configurations represented by terminal Optuna trials.
-
-#     COMPLETE trials are successful evaluations.
-#     FAIL trials are retained as attempted configurations. This is important
-#     for configurations that genuinely diverged, e.g. non-finite local loss.
-#     Duplicate/re-evaluated trials do not increase the unique count.
-#     """
-#     terminal_trials = [
-#         trial
-#         for trial in study.trials
-#         if trial.state in {
-#             TrialState.COMPLETE,
-#             TrialState.FAIL,
-#         }
-#     ]
-
-#     by_configuration: dict[str, list[Any]] = {}
-
-#     for trial in terminal_trials:
-#         key = _trial_parameter_key(trial)
-#         by_configuration.setdefault(key, []).append(trial)
-
-#     unique_successful = set()
-#     unique_failed_only = set()
-#     unique_retried = set()
-
-#     for key, trials in by_configuration.items():
-#         states = {trial.state for trial in trials}
-
-#         if TrialState.COMPLETE in states:
-#             unique_successful.add(key)
-
-#         if (
-#             TrialState.FAIL in states
-#             and TrialState.COMPLETE not in states
-#         ):
-#             unique_failed_only.add(key)
-
-#         if len(trials) > 1:
-#             unique_retried.add(key)
-
-#     return {
-#         "unique_attempted": len(by_configuration),
-#         "unique_successful": len(unique_successful),
-#         "unique_failed_only": len(unique_failed_only),
-#         "unique_retried": len(unique_retried),
-#         "total_terminal_trials": len(terminal_trials),
-#     }
 
