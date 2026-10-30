@@ -32,15 +32,42 @@ python - <<'PY'
 import sys
 import optuna
 import torch
+import torchvision
+import psutil
+import yaml
+import numpy
+import pandas
+import sklearn
+import scipy
 
 print("Python executable:", sys.executable)
 print("Optuna:", optuna.__version__)
 print("Torch:", torch.__version__)
-print("CUDA available:", torch.cuda.is_available())
-if not torch.cuda.is_available():
-    raise RuntimeError("CUDA GPU is not available in this SLURM job.")
+print("Torchvision:", torchvision.__version__)
+print("psutil:", psutil.__version__)
+print("NumPy:", numpy.__version__)
+print("Pandas:", pandas.__version__)
+print("scikit-learn:", sklearn.__version__)
+print("SciPy:", scipy.__version__)
 
+print("Torch CUDA build:", torch.version.cuda)
+print("CUDA available:", torch.cuda.is_available())
+
+if not torch.cuda.is_available():
+    raise RuntimeError(
+        "CUDA GPU is not available in this SLURM job."
+    )
+
+print("GPU count:", torch.cuda.device_count())
 print("GPU:", torch.cuda.get_device_name(0))
+print("Capability:", torch.cuda.get_device_capability(0))
+
+x = torch.tensor([1.0], device="cuda")
+y = x * 2
+torch.cuda.synchronize()
+
+print("CUDA execution test:", y.item())
+print("Environment check PASSED")
 PY
 
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
