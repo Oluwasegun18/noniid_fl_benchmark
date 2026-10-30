@@ -704,7 +704,32 @@ def run_optuna_search_from_dicts(
             f"{requeued} infrastructure-failed configuration(s)."
         )
 
-    # _reenqueue_infrastructure_failures(study)
+
+    waiting_retries = sum(
+        trial.state == TrialState.WAITING
+        for trial in study.trials
+    )
+
+    if waiting_retries > 0:
+        print(
+            f"[Optuna recovery] {waiting_retries} fixed retry trial(s) "
+            f"are waiting."
+        )
+
+        # GridSampler considers the original grid exhausted because every
+        # combination was assigned previously. Use RandomSampler only to
+        # execute the already-enqueued fixed configurations.
+        #
+        # The sampler does NOT choose retry hyperparameters because the
+        # parameters were fixed by enqueue_trial().
+        study.sampler = optuna.samplers.RandomSampler(
+            seed=sampler_seed
+        )
+
+        print(
+            "[Optuna recovery] Temporarily using RandomSampler to "
+            "execute fixed queued retries."
+        )
 
     recover_interrupted = bool(
         search_cfg.get("optuna", {}).get(
@@ -871,6 +896,33 @@ def run_optuna_search(
     )
 
 
+def _trial_parameter_key(
+    trial: optuna.trial.FrozenTrial,
+) -> str:
+    """
+    Canonical key for one hyperparameter configuration.
+
+    Enqueued WAITING trials may not yet expose their fixed parameters
+    through trial.params. Optuna stores them in system_attrs["fixed_params"].
+    """
+
+    params = dict(trial.params)
+
+    if not params:
+        fixed_params = trial.system_attrs.get("fixed_params")
+
+        if isinstance(fixed_params, dict):
+            params = dict(fixed_params)
+
+    return json.dumps(
+        params,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+
 def _trial_parameter_key(trial: optuna.trial.FrozenTrial) -> str:
     """Canonical key used to identify one unique hyperparameter configuration."""
     return json.dumps(
@@ -910,6 +962,9 @@ def _evaluated_configuration_stats(
             # This also recognizes historical runtime_error trials
             # caused by known CUDA/infrastructure problems.
             if _is_infrastructure_failure(trial):
+                continue
+
+            if trial.user_attrs.get("failure_type") == "duplicate_retry":
                 continue
 
             valid_terminal_trials.append(trial)
