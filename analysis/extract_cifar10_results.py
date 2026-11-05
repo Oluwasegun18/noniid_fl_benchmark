@@ -12,13 +12,12 @@ import yaml
 # Configuration
 # ============================================================
 
-PROJECT_ROOT = Path(".").resolve()
-SEARCH_ROOT = PROJECT_ROOT / "search_outputs"
-
-OUTPUT_DIR = PROJECT_ROOT / "extracted_results"
+ROOT = Path(".").resolve()
+SEARCH_ROOT = ROOT / "search_outputs"
+OUTPUT_DIR = ROOT / "extracted_results"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-ALGORITHM_ORDER = [
+ALGORITHMS = [
     "fedavg",
     "fedprox",
     "scaffold",
@@ -29,167 +28,206 @@ ALGORITHM_ORDER = [
     "fedgucci",
 ]
 
-# Used only for sorting/pretty reporting.
-def scenario_label(name: str) -> str:
-    x = name.lower()
-
-    if "highly_non_iid" in x or "a0p01" in x:
-        return "Highly Non-IID"
-
-    if "mild" in x or "a0p5" in x:
-        return "Mild Non-IID"
-
-    if "iid_like" in x or "a100" in x:
-        return "IID-like"
-
-    return name
-
-
-def scenario_order(label: str) -> int:
-    order = {
-        "Highly Non-IID": 0,
-        "Mild Non-IID": 1,
-        "IID-like": 2,
-    }
-    return order.get(label, 99)
+SCENARIOS = {
+    "cifar10_dirichlet_highly_non_iid_a0p01": {
+        "label": "Highly Non-IID",
+        "alpha": 0.01,
+        "order": 0,
+    },
+    "cifar10_dirichlet_mildly_non_iid_a0p5": {
+        "label": "Mildly Non-IID",
+        "alpha": 0.5,
+        "order": 1,
+    },
+    "cifar10_dirichlet_iid_like_a100p0": {
+        "label": "IID-like",
+        "alpha": 100.0,
+        "order": 2,
+    },
+}
 
 
-def algorithm_order(name: str) -> int:
-    name = str(name).lower()
-    try:
-        return ALGORITHM_ORDER.index(name)
-    except ValueError:
-        return 99
+# ============================================================
+# Helpers
+# ============================================================
 
-
-def read_json(path: Path):
+def load_json(path: Path) -> dict:
     if not path.exists():
         return {}
+
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
-        print(f"[WARNING] Cannot read {path}: {exc}")
+        print(f"[WARNING] Could not read {path}: {exc}")
         return {}
 
 
-def read_yaml(path: Path):
+def load_yaml(path: Path) -> dict:
     if not path.exists():
         return {}
+
     try:
-        value = yaml.safe_load(path.read_text(encoding="utf-8"))
-        return value if isinstance(value, dict) else {}
+        x = yaml.safe_load(path.read_text(encoding="utf-8"))
+        return x if isinstance(x, dict) else {}
     except Exception as exc:
-        print(f"[WARNING] Cannot read {path}: {exc}")
+        print(f"[WARNING] Could not read {path}: {exc}")
         return {}
+
+
+def flatten_dict(d: dict, prefix: str = "") -> dict:
+    """
+    Flatten nested YAML/JSON configuration dictionaries.
+
+    Example:
+        training:
+          learning_rate: 0.1
+
+    becomes:
+        training.learning_rate = 0.1
+    """
+    out = {}
+
+    for key, value in d.items():
+        name = f"{prefix}.{key}" if prefix else str(key)
+
+        if isinstance(value, dict):
+            out.update(flatten_dict(value, name))
+        else:
+            out[name] = value
+
+    return out
+
+
+def safe_numeric(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return np.nan
 
 
 # ============================================================
-# 1. Extract search results
+# SEARCH RESULTS
 # ============================================================
 
 def extract_search_results() -> pd.DataFrame:
+
     rows = []
 
-    scenario_dirs = sorted(
-        p for p in SEARCH_ROOT.glob("cifar10_*")
-        if p.is_dir()
-    )
+    for scenario_name, meta in SCENARIOS.items():
 
-    print("\nCIFAR-10 search scenarios found:")
-    for p in scenario_dirs:
-        print("  ", p)
+        scenario_dir = SEARCH_ROOT / scenario_name
 
-    for scenario_dir in scenario_dirs:
+        if not scenario_dir.exists():
+            print(f"[WARNING] Missing scenario: {scenario_dir}")
+            continue
 
-        scenario = scenario_dir.name
-        pretty_scenario = scenario_label(scenario)
+        for algorithm in ALGORITHMS:
 
-        for algorithm_dir in sorted(scenario_dir.iterdir()):
+            algorithm_dir = scenario_dir / algorithm
 
-            if not algorithm_dir.is_dir():
-                continue
-
-            algorithm = algorithm_dir.name.lower()
-
-            if algorithm not in ALGORITHM_ORDER:
+            if not algorithm_dir.exists():
+                print(
+                    f"[WARNING] Missing algorithm directory: "
+                    f"{scenario_name}/{algorithm}"
+                )
                 continue
 
             summary_file = algorithm_dir / "search_summary.json"
             params_file = algorithm_dir / "best_parameters.yaml"
+            config_file = algorithm_dir / "best_config.yaml"
             trials_file = algorithm_dir / "optuna_trials.csv"
 
-            summary = read_json(summary_file)
-            best_params = read_yaml(params_file)
+            search_summary = load_json(summary_file)
+            best_params = load_yaml(params_file)
+            best_config = load_yaml(config_file)
+
+            best_trial_number = search_summary.get(
+                "best_trial_number"
+            )
+
+            best_val_accuracy = search_summary.get(
+                "best_observed_validation_accuracy"
+            )
 
             # ------------------------------------------------
-            # Prefer best trial information from search summary
+            # Recover exact best-trial metrics from CSV
             # ------------------------------------------------
-
-            best_trial = summary.get("best_trial_number")
-            best_val = summary.get("best_observed_validation_accuracy")
 
             best_trial_row = None
 
             if trials_file.exists():
+
                 trials = pd.read_csv(trials_file)
 
-                # Keep completed trials only
                 if "state" in trials.columns:
-                    completed = trials[
-                        trials["state"].astype(str).str.upper() == "COMPLETE"
+                    complete = trials[
+                        trials["state"]
+                        .astype(str)
+                        .str.upper()
+                        .eq("COMPLETE")
                     ].copy()
                 else:
-                    completed = trials.copy()
+                    complete = trials.copy()
 
-                # Recover best trial if summary is incomplete
-                if best_trial is None and not completed.empty:
-                    metric = (
-                        "objective"
-                        if "objective" in completed.columns
-                        else "val_accuracy"
-                    )
+                if best_trial_number is not None:
 
-                    completed[metric] = pd.to_numeric(
-                        completed[metric],
+                    trial_numbers = pd.to_numeric(
+                        complete["trial_number"],
                         errors="coerce",
                     )
 
-                    completed = completed.dropna(subset=[metric])
-
-                    if not completed.empty:
-                        idx = completed[metric].idxmax()
-                        best_trial_row = completed.loc[idx]
-                        best_trial = int(best_trial_row["trial_number"])
-
-                elif best_trial is not None:
-                    match = trials[
-                        pd.to_numeric(
-                            trials["trial_number"],
-                            errors="coerce",
-                        ) == float(best_trial)
+                    matched = complete[
+                        trial_numbers == float(best_trial_number)
                     ]
 
-                    if not match.empty:
-                        best_trial_row = match.iloc[0]
+                    if not matched.empty:
+                        best_trial_row = matched.iloc[0]
+
+                # Fallback if search_summary is incomplete
+                if best_trial_row is None and not complete.empty:
+
+                    metric_col = (
+                        "objective"
+                        if "objective" in complete.columns
+                        else "val_accuracy"
+                    )
+
+                    complete[metric_col] = pd.to_numeric(
+                        complete[metric_col],
+                        errors="coerce",
+                    )
+
+                    valid = complete.dropna(subset=[metric_col])
+
+                    if not valid.empty:
+                        idx = valid[metric_col].idxmax()
+                        best_trial_row = valid.loc[idx]
+
+                        best_trial_number = int(
+                            best_trial_row["trial_number"]
+                        )
 
             # ------------------------------------------------
-            # Recover metrics directly from best trial
+            # Extract trial metrics
             # ------------------------------------------------
 
             search_test_accuracy = np.nan
-            macro_f1 = np.nan
-            runtime = np.nan
-            comm_bytes = np.nan
-            gpu_energy = np.nan
-            termination_round = np.nan
-            stopping_reason = None
+            search_macro_f1 = np.nan
+            search_runtime_sec = np.nan
+            search_comm_bytes = np.nan
+            search_gpu_energy_j = np.nan
+            search_termination_round = np.nan
+            search_stopping_reason = None
 
             if best_trial_row is not None:
 
-                if pd.isna(best_val):
-                    best_val = best_trial_row.get(
+                if best_val_accuracy is None:
+                    best_val_accuracy = best_trial_row.get(
                         "val_accuracy",
-                        best_trial_row.get("objective", np.nan),
+                        best_trial_row.get(
+                            "objective",
+                            np.nan,
+                        ),
                     )
 
                 search_test_accuracy = best_trial_row.get(
@@ -197,77 +235,109 @@ def extract_search_results() -> pd.DataFrame:
                     np.nan,
                 )
 
-                macro_f1 = best_trial_row.get(
+                search_macro_f1 = best_trial_row.get(
                     "macro_f1",
                     np.nan,
                 )
 
-                runtime = best_trial_row.get(
+                search_runtime_sec = best_trial_row.get(
                     "cumulative_wall_time_sec",
                     np.nan,
                 )
 
-                comm_bytes = best_trial_row.get(
+                search_comm_bytes = best_trial_row.get(
                     "total_comm_bytes",
                     np.nan,
                 )
 
-                gpu_energy = best_trial_row.get(
+                search_gpu_energy_j = best_trial_row.get(
                     "run_gpu_energy_measured_j",
                     np.nan,
                 )
 
-                termination_round = best_trial_row.get(
+                search_termination_round = best_trial_row.get(
                     "termination_round",
                     np.nan,
                 )
 
-                stopping_reason = best_trial_row.get(
+                search_stopping_reason = best_trial_row.get(
                     "stopping_reason",
                     None,
                 )
 
             row = {
                 "dataset": "cifar10",
-                "scenario": scenario,
-                "scenario_label": pretty_scenario,
+                "scenario": scenario_name,
+                "scenario_label": meta["label"],
+                "dirichlet_alpha": meta["alpha"],
+                "scenario_order": meta["order"],
                 "algorithm": algorithm,
-                "search_status": summary.get("status"),
-                "best_trial": best_trial,
-                "best_val_accuracy": best_val,
+                "algorithm_order": ALGORITHMS.index(
+                    algorithm
+                ),
+                "search_status": search_summary.get(
+                    "status"
+                ),
+                "possible_configurations": search_summary.get(
+                    "possible_configurations"
+                ),
+                "completed_trials": search_summary.get(
+                    "completed_trials"
+                ),
+                "failed_trials": search_summary.get(
+                    "failed_trials"
+                ),
+                "best_trial_number": best_trial_number,
+                "best_val_accuracy": best_val_accuracy,
                 "search_test_accuracy": search_test_accuracy,
-                "search_macro_f1": macro_f1,
-                "search_runtime_sec": runtime,
-                "search_comm_bytes": comm_bytes,
-                "search_gpu_energy_j": gpu_energy,
-                "search_termination_round": termination_round,
-                "search_stopping_reason": stopping_reason,
+                "search_macro_f1": search_macro_f1,
+                "search_runtime_sec": search_runtime_sec,
+                "search_comm_bytes": search_comm_bytes,
+                "search_gpu_energy_j": search_gpu_energy_j,
+                "search_termination_round":
+                    search_termination_round,
+                "search_stopping_reason":
+                    search_stopping_reason,
             }
 
-            # Add hyperparameters as normal columns
-            for key, value in best_params.items():
-                row[key] = value
+            # ---------------------------------------------
+            # Put searched hyperparameters in columns
+            # ---------------------------------------------
+
+            flat_params = flatten_dict(best_params)
+
+            for key, value in flat_params.items():
+                row[f"param.{key}"] = value
+
+            # Also keep selected useful resolved config
+            flat_cfg = flatten_dict(best_config)
+
+            useful_config_keys = [
+                "training.learning_rate",
+                "training.local_epochs",
+                "training.batch_size",
+                "algorithm.mu",
+                "algorithm.alpha",
+                "algorithm.rho",
+                "algorithm.beta",
+                "algorithm.num_anchors",
+                "algorithm.anchor_count",
+            ]
+
+            for key in useful_config_keys:
+                if key in flat_cfg:
+                    row[key] = flat_cfg[key]
 
             rows.append(row)
 
     df = pd.DataFrame(rows)
 
     if not df.empty:
-        df["_scenario_order"] = df["scenario_label"].map(
-            scenario_order
-        )
-        df["_algorithm_order"] = df["algorithm"].map(
-            algorithm_order
-        )
-
         df = (
             df.sort_values(
-                ["_scenario_order", "_algorithm_order"]
-            )
-            .drop(
-                columns=[
-                    "_scenario_order",
-                    "_algorithm_order",
+                [
+                    "scenario_order",
+                    "algorithm_order",
                 ]
             )
             .reset_index(drop=True)
@@ -277,156 +347,100 @@ def extract_search_results() -> pd.DataFrame:
 
 
 # ============================================================
-# 2. Find confirmation result files
-# ============================================================
-
-def find_confirmation_files():
-    """
-    Search the project recursively because confirmation
-    output directory names may differ between versions.
-    """
-
-    files = []
-
-    for p in PROJECT_ROOT.rglob("confirmation_results.csv"):
-
-        # Avoid extracting our own output
-        if OUTPUT_DIR in p.parents:
-            continue
-
-        files.append(p)
-
-    return sorted(set(files))
-
-
-# ============================================================
-# 3. Extract confirmation results
+# CONFIRMATION RESULTS
 # ============================================================
 
 def extract_confirmation_results() -> pd.DataFrame:
 
-    files = find_confirmation_files()
+    all_rows = []
 
-    print("\nConfirmation files discovered:")
-    for p in files:
-        print("  ", p)
+    for scenario_name, meta in SCENARIOS.items():
 
-    frames = []
+        scenario_dir = SEARCH_ROOT / scenario_name
 
-    for path in files:
+        for algorithm in ALGORITHMS:
 
-        try:
-            df = pd.read_csv(path)
-        except Exception as exc:
-            print(f"[WARNING] Cannot read {path}: {exc}")
-            continue
+            algorithm_dir = scenario_dir / algorithm
 
-        if df.empty:
-            continue
-
-        # ----------------------------------------------
-        # Determine whether this belongs to CIFAR-10
-        # ----------------------------------------------
-
-        is_cifar10 = "cifar10" in str(path).lower()
-
-        if "dataset" in df.columns:
-            dataset_match = (
-                df["dataset"]
-                .astype(str)
-                .str.lower()
-                .eq("cifar10")
+            csv_file = (
+                algorithm_dir /
+                "confirmation_results.csv"
             )
 
-            if dataset_match.any():
-                df = df[dataset_match].copy()
-                is_cifar10 = True
+            if not csv_file.exists():
+                print(
+                    f"[WARNING] Missing confirmation: "
+                    f"{scenario_name}/{algorithm}"
+                )
+                continue
 
-        if not is_cifar10:
-            continue
+            try:
+                df = pd.read_csv(csv_file)
+            except Exception as exc:
+                print(
+                    f"[WARNING] Could not read "
+                    f"{csv_file}: {exc}"
+                )
+                continue
 
-        if df.empty:
-            continue
+            if df.empty:
+                print(
+                    f"[WARNING] Empty confirmation file: "
+                    f"{csv_file}"
+                )
+                continue
 
-        df["source_file"] = str(path)
+            # Add identifiers ourselves rather than rely on
+            # whatever naming convention the CSV uses.
+            df["dataset"] = "cifar10"
+            df["scenario"] = scenario_name
+            df["scenario_label"] = meta["label"]
+            df["dirichlet_alpha"] = meta["alpha"]
+            df["scenario_order"] = meta["order"]
+            df["algorithm"] = algorithm
+            df["algorithm_order"] = (
+                ALGORITHMS.index(algorithm)
+            )
 
-        frames.append(df)
+            df["source_file"] = str(csv_file)
 
-    if not frames:
-        print(
-            "\n[WARNING] No CIFAR-10 confirmation_results.csv "
-            "files were found."
-        )
+            all_rows.append(df)
+
+    if not all_rows:
         return pd.DataFrame()
 
     result = pd.concat(
-        frames,
+        all_rows,
         ignore_index=True,
         sort=False,
     )
 
-    # Remove accidental duplicates
-    result = result.drop_duplicates().reset_index(drop=True)
-
-    # ----------------------------------------------
-    # Normalize common column names
-    # ----------------------------------------------
-
-    rename_candidates = {
-        "method": "algorithm",
-        "algo": "algorithm",
-        "seed_value": "seed",
-        "accuracy": "test_accuracy",
-        "test_acc": "test_accuracy",
-        "f1": "macro_f1",
-        "runtime_sec": "cumulative_wall_time_sec",
-        "wall_time_sec": "cumulative_wall_time_sec",
-        "communication_bytes": "total_comm_bytes",
-        "gpu_energy_j": "run_gpu_energy_measured_j",
-    }
-
-    for old, new in rename_candidates.items():
-        if old in result.columns and new not in result.columns:
-            result = result.rename(columns={old: new})
-
-    if "algorithm" in result.columns:
-        result["algorithm"] = (
-            result["algorithm"]
-            .astype(str)
-            .str.lower()
-        )
-
-    # Try to infer scenario when missing
-    if "scenario" not in result.columns:
-        result["scenario"] = result["source_file"].apply(
-            infer_scenario_from_path
-        )
-
-    if "scenario_label" not in result.columns:
-        result["scenario_label"] = result["scenario"].apply(
-            scenario_label
-        )
+    result = result.sort_values(
+        [
+            "scenario_order",
+            "algorithm_order",
+        ]
+    ).reset_index(drop=True)
 
     return result
 
 
-def infer_scenario_from_path(path):
-    x = str(path).lower()
+# ============================================================
+# INSPECT CONFIRMATION COLUMNS
+# ============================================================
 
-    if "highly_non_iid" in x or "a0p01" in x:
-        return "cifar10_dirichlet_highly_non_iid_a0p01"
+def print_confirmation_columns(df):
 
-    if "mild" in x or "a0p5" in x:
-        return "cifar10_dirichlet_mild_non_iid_a0p5"
+    if df.empty:
+        return
 
-    if "iid_like" in x or "a100" in x:
-        return "cifar10_dirichlet_iid_like_a100"
-
-    return "unknown"
+    print("\nColumns in confirmation_results.csv:")
+    for col in df.columns:
+        print("  ", col)
 
 
 # ============================================================
-# 4. Aggregate confirmation seeds
+# CONFIRMATION AGGREGATION
 # ============================================================
 
 def aggregate_confirmation(df: pd.DataFrame) -> pd.DataFrame:
@@ -434,20 +448,29 @@ def aggregate_confirmation(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame()
 
-    # Columns we want to summarize if available
-    metrics = [
+    # Support the names currently used by the benchmark.
+    candidate_metrics = [
+        "val_accuracy",
         "test_accuracy",
         "macro_f1",
+        "mean_local_loss",
         "cumulative_wall_time_sec",
         "total_comm_bytes",
         "run_gpu_energy_measured_j",
+        "run_total_energy_hybrid_j",
         "termination_round",
     ]
 
     metrics = [
-        col for col in metrics
-        if col in df.columns
+        c for c in candidate_metrics
+        if c in df.columns
     ]
+
+    if not metrics:
+        raise RuntimeError(
+            "No expected confirmation metric columns found.\n"
+            f"Available columns:\n{list(df.columns)}"
+        )
 
     for col in metrics:
         df[col] = pd.to_numeric(
@@ -456,84 +479,110 @@ def aggregate_confirmation(df: pd.DataFrame) -> pd.DataFrame:
         )
 
     group_cols = [
-        col for col in
-        ["dataset", "scenario", "scenario_label", "algorithm"]
-        if col in df.columns
+        "dataset",
+        "scenario",
+        "scenario_label",
+        "dirichlet_alpha",
+        "scenario_order",
+        "algorithm",
+        "algorithm_order",
     ]
 
-    if "algorithm" not in group_cols:
-        raise ValueError(
-            "Could not identify the algorithm column in "
-            "confirmation_results.csv"
-        )
+    rows = []
 
-    agg_spec = {}
+    for keys, group in df.groupby(
+        group_cols,
+        dropna=False,
+    ):
 
-    for metric in metrics:
-        agg_spec[f"{metric}_mean"] = (
-            metric,
-            "mean",
-        )
-        agg_spec[f"{metric}_std"] = (
-            metric,
-            "std",
-        )
+        row = dict(zip(group_cols, keys))
 
-    if "seed" in df.columns:
-        agg_spec["confirmation_seeds"] = (
-            "seed",
-            lambda x: ",".join(
-                map(
-                    str,
-                    sorted(
-                        pd.Series(x)
-                        .dropna()
-                        .unique()
-                    ),
+        # ---------------------------------------------
+        # Number / list of confirmation seeds
+        # ---------------------------------------------
+
+        if "seed" in group.columns:
+
+            seeds = (
+                pd.to_numeric(
+                    group["seed"],
+                    errors="coerce",
                 )
-            ),
-        )
+                .dropna()
+                .astype(int)
+                .unique()
+            )
 
-        agg_spec["n_confirmation_seeds"] = (
-            "seed",
-            "nunique",
-        )
-    else:
-        first_metric = metrics[0]
+            seeds = sorted(seeds)
 
-        agg_spec["n_confirmation_seeds"] = (
-            first_metric,
-            "count",
-        )
+            row["n_confirmation_seeds"] = len(
+                seeds
+            )
 
-    summary = (
-        df.groupby(
-            group_cols,
-            dropna=False,
-        )
-        .agg(**agg_spec)
-        .reset_index()
-    )
+            row["confirmation_seeds"] = ",".join(
+                map(str, seeds)
+            )
 
-    # Standard deviations are NaN for one seed -> make explicit
-    std_cols = [
-        c for c in summary.columns
-        if c.endswith("_std")
-    ]
+        else:
+            row["n_confirmation_seeds"] = len(
+                group
+            )
 
-    summary[std_cols] = summary[std_cols].fillna(0.0)
+        # ---------------------------------------------
+        # Metric mean / std / min / max
+        # ---------------------------------------------
+
+        for metric in metrics:
+
+            values = pd.to_numeric(
+                group[metric],
+                errors="coerce",
+            ).dropna()
+
+            if values.empty:
+                continue
+
+            row[f"{metric}_mean"] = (
+                values.mean()
+            )
+
+            row[f"{metric}_std"] = (
+                values.std(ddof=1)
+                if len(values) > 1
+                else 0.0
+            )
+
+            row[f"{metric}_min"] = (
+                values.min()
+            )
+
+            row[f"{metric}_max"] = (
+                values.max()
+            )
+
+        rows.append(row)
+
+    summary = pd.DataFrame(rows)
+
+    if not summary.empty:
+        summary = summary.sort_values(
+            [
+                "scenario_order",
+                "algorithm_order",
+            ]
+        ).reset_index(drop=True)
 
     return summary
 
 
 # ============================================================
-# 5. Merge search + confirmation
+# MERGE SEARCH + CONFIRMATION
 # ============================================================
 
-def merge_results(
-    search_df: pd.DataFrame,
-    confirmation_summary: pd.DataFrame,
-) -> pd.DataFrame:
+def merge_search_confirmation(
+    search_df,
+    confirmation_summary,
+):
 
     if search_df.empty:
         return confirmation_summary
@@ -541,126 +590,255 @@ def merge_results(
     if confirmation_summary.empty:
         return search_df
 
-    merge_cols = [
-        "algorithm",
-        "scenario_label",
+    conf = confirmation_summary.copy()
+
+    # Remove duplicate metadata before merge
+    duplicate_cols = [
+        "dataset",
+        "scenario",
+        "dirichlet_alpha",
+        "scenario_order",
+        "algorithm_order",
     ]
 
-    final = search_df.merge(
-        confirmation_summary,
-        on=merge_cols,
+    for col in duplicate_cols:
+        if col in conf.columns:
+            conf = conf.drop(columns=col)
+
+    merged = search_df.merge(
+        conf,
+        on=[
+            "scenario_label",
+            "algorithm",
+        ],
         how="left",
-        suffixes=("_search", "_confirmation"),
     )
 
-    final["_scenario_order"] = (
-        final["scenario_label"]
-        .map(scenario_order)
-    )
+    merged = merged.sort_values(
+        [
+            "scenario_order",
+            "algorithm_order",
+        ]
+    ).reset_index(drop=True)
 
-    final["_algorithm_order"] = (
-        final["algorithm"]
-        .map(algorithm_order)
-    )
+    return merged
 
-    final = (
-        final.sort_values(
-            ["_scenario_order", "_algorithm_order"]
+
+# ============================================================
+# PAPER-READY TABLE
+# ============================================================
+
+def make_paper_table(df):
+
+    if df.empty:
+        return pd.DataFrame()
+
+    rows = []
+
+    for _, r in df.iterrows():
+
+        row = {
+            "Scenario":
+                r.get("scenario_label"),
+
+            "Algorithm":
+                r.get("algorithm"),
+
+            "Search Best Val. Accuracy":
+                r.get("best_val_accuracy"),
+        }
+
+        # ---------------------------------------------
+        # Hyperparameters
+        # ---------------------------------------------
+
+        parameter_mapping = {
+            "Learning Rate":
+                "training.learning_rate",
+
+            "Local Epochs":
+                "training.local_epochs",
+
+            "Batch Size":
+                "training.batch_size",
+
+            "mu":
+                "algorithm.mu",
+
+            "alpha":
+                "algorithm.alpha",
+
+            "rho":
+                "algorithm.rho",
+
+            "beta":
+                "algorithm.beta",
+
+            "Anchors":
+                "algorithm.num_anchors",
+        }
+
+        for display, source in parameter_mapping.items():
+
+            if source in df.columns:
+                row[display] = r.get(source)
+
+        # ---------------------------------------------
+        # Confirmation metrics
+        # ---------------------------------------------
+
+        pairs = {
+            "Confirmation Test Accuracy":
+                "test_accuracy",
+
+            "Confirmation Macro-F1":
+                "macro_f1",
+
+            "Runtime (s)":
+                "cumulative_wall_time_sec",
+
+            "Communication (bytes)":
+                "total_comm_bytes",
+
+            "GPU Energy (J)":
+                "run_gpu_energy_measured_j",
+
+            "Termination Round":
+                "termination_round",
+        }
+
+        for display, metric in pairs.items():
+
+            mean_col = f"{metric}_mean"
+            std_col = f"{metric}_std"
+
+            if mean_col not in df.columns:
+                continue
+
+            mean = r.get(mean_col)
+            std = r.get(std_col)
+
+            if pd.isna(mean):
+                row[display] = ""
+                continue
+
+            if pd.notna(std):
+                row[display] = (
+                    f"{mean:.4f} ± {std:.4f}"
+                )
+            else:
+                row[display] = f"{mean:.4f}"
+
+        row["Confirmation Seeds"] = r.get(
+            "confirmation_seeds"
         )
-        .drop(
-            columns=[
-                "_scenario_order",
-                "_algorithm_order",
+
+        row["N Seeds"] = r.get(
+            "n_confirmation_seeds"
+        )
+
+        rows.append(row)
+
+    return pd.DataFrame(rows)
+
+
+# ============================================================
+# Completeness check
+# ============================================================
+
+def print_completeness(
+    search_df,
+    confirmation_summary,
+):
+
+    print("\n" + "=" * 70)
+    print("COMPLETENESS CHECK")
+    print("=" * 70)
+
+    expected = (
+        len(SCENARIOS)
+        * len(ALGORITHMS)
+    )
+
+    print(
+        f"Expected scenario/algorithm pairs: "
+        f"{expected}"
+    )
+
+    print(
+        f"Search results found: "
+        f"{len(search_df)}"
+    )
+
+    print(
+        f"Confirmation summaries found: "
+        f"{len(confirmation_summary)}"
+    )
+
+    print("\nPer scenario:")
+
+    for scenario_name, meta in SCENARIOS.items():
+
+        label = meta["label"]
+
+        search_algos = set(
+            search_df.loc[
+                search_df["scenario_label"] == label,
+                "algorithm",
             ]
         )
-        .reset_index(drop=True)
-    )
 
-    return final
+        if not confirmation_summary.empty:
 
+            confirm_algos = set(
+                confirmation_summary.loc[
+                    confirmation_summary[
+                        "scenario_label"
+                    ] == label,
+                    "algorithm",
+                ]
+            )
 
-# ============================================================
-# 6. Paper-friendly table
-# ============================================================
+        else:
+            confirm_algos = set()
 
-def make_paper_table(final_df: pd.DataFrame) -> pd.DataFrame:
-
-    if final_df.empty:
-        return final_df
-
-    result = pd.DataFrame()
-
-    result["Scenario"] = final_df["scenario_label"]
-    result["Algorithm"] = final_df["algorithm"]
-
-    if "best_val_accuracy" in final_df.columns:
-        result["Search Val. Acc."] = final_df[
-            "best_val_accuracy"
-        ]
-
-    acc_mean = "test_accuracy_mean"
-    acc_std = "test_accuracy_std"
-
-    if (
-        acc_mean in final_df.columns
-        and acc_std in final_df.columns
-    ):
-        result["Confirmation Accuracy"] = final_df.apply(
-            lambda r: (
-                f"{r[acc_mean]:.4f} ± "
-                f"{r[acc_std]:.4f}"
-                if pd.notna(r[acc_mean])
-                else ""
-            ),
-            axis=1,
+        missing_search = (
+            set(ALGORITHMS)
+            - search_algos
         )
 
-    if (
-        "macro_f1_mean" in final_df.columns
-        and "macro_f1_std" in final_df.columns
-    ):
-        result["Macro-F1"] = final_df.apply(
-            lambda r: (
-                f"{r['macro_f1_mean']:.4f} ± "
-                f"{r['macro_f1_std']:.4f}"
-                if pd.notna(r["macro_f1_mean"])
-                else ""
-            ),
-            axis=1,
+        missing_confirmation = (
+            set(ALGORITHMS)
+            - confirm_algos
         )
 
-    # Hyperparameters
-    parameter_columns = [
-        "training.learning_rate",
-        "training.local_epochs",
-        "training.batch_size",
-        "algorithm.mu",
-        "algorithm.alpha",
-        "algorithm.rho",
-        "algorithm.beta",
-        "algorithm.num_anchors",
-    ]
+        print(f"\n{label}")
 
-    for col in parameter_columns:
-        if col in final_df.columns:
-            result[col] = final_df[col]
+        print(
+            "  Search:",
+            len(search_algos),
+            "/",
+            len(ALGORITHMS),
+        )
 
-    if "cumulative_wall_time_sec_mean" in final_df.columns:
-        result["Runtime (s)"] = final_df[
-            "cumulative_wall_time_sec_mean"
-        ]
+        print(
+            "  Confirmation:",
+            len(confirm_algos),
+            "/",
+            len(ALGORITHMS),
+        )
 
-    if "total_comm_bytes_mean" in final_df.columns:
-        result["Communication (bytes)"] = final_df[
-            "total_comm_bytes_mean"
-        ]
+        if missing_search:
+            print(
+                "  Missing search:",
+                sorted(missing_search),
+            )
 
-    if "run_gpu_energy_measured_j_mean" in final_df.columns:
-        result["GPU Energy (J)"] = final_df[
-            "run_gpu_energy_measured_j_mean"
-        ]
-
-    return result
+        if missing_confirmation:
+            print(
+                "  Missing confirmation:",
+                sorted(missing_confirmation),
+            )
 
 
 # ============================================================
@@ -670,135 +848,148 @@ def make_paper_table(final_df: pd.DataFrame) -> pd.DataFrame:
 def main():
 
     print("=" * 70)
-    print("EXTRACTING CIFAR-10 RESULTS")
+    print("CIFAR-10 SEARCH + CONFIRMATION EXTRACTION")
     print("=" * 70)
 
-    # --------------------------------------------
+    # --------------------------------------------------------
     # Search
-    # --------------------------------------------
+    # --------------------------------------------------------
 
     search_df = extract_search_results()
 
-    search_path = (
+    search_file = (
         OUTPUT_DIR /
         "cifar10_search_results.csv"
     )
 
     search_df.to_csv(
-        search_path,
+        search_file,
         index=False,
     )
 
     print(
-        f"\nSearch results: {len(search_df)} rows"
+        f"\nSaved search results:\n"
+        f"  {search_file}"
     )
-    print(f"Saved: {search_path}")
 
-    # --------------------------------------------
-    # Confirmation
-    # --------------------------------------------
+    # --------------------------------------------------------
+    # Confirmation seed-level
+    # --------------------------------------------------------
 
-    confirmation_df = extract_confirmation_results()
+    confirmation_df = (
+        extract_confirmation_results()
+    )
 
-    confirmation_path = (
+    print_confirmation_columns(
+        confirmation_df
+    )
+
+    confirmation_file = (
         OUTPUT_DIR /
         "cifar10_confirmation_results.csv"
     )
 
     confirmation_df.to_csv(
-        confirmation_path,
+        confirmation_file,
         index=False,
     )
 
     print(
-        f"\nConfirmation seed-level results: "
-        f"{len(confirmation_df)} rows"
-    )
-    print(f"Saved: {confirmation_path}")
-
-    # --------------------------------------------
-    # Aggregate confirmation
-    # --------------------------------------------
-
-    confirmation_summary = aggregate_confirmation(
-        confirmation_df
+        f"\nSaved confirmation seed results:\n"
+        f"  {confirmation_file}"
     )
 
-    summary_path = (
+    # --------------------------------------------------------
+    # Confirmation aggregate
+    # --------------------------------------------------------
+
+    confirmation_summary = (
+        aggregate_confirmation(
+            confirmation_df
+        )
+    )
+
+    confirmation_summary_file = (
         OUTPUT_DIR /
         "cifar10_confirmation_summary.csv"
     )
 
     confirmation_summary.to_csv(
-        summary_path,
+        confirmation_summary_file,
         index=False,
     )
 
     print(
-        f"\nConfirmation summary: "
-        f"{len(confirmation_summary)} rows"
+        f"\nSaved confirmation summary:\n"
+        f"  {confirmation_summary_file}"
     )
-    print(f"Saved: {summary_path}")
 
-    # --------------------------------------------
-    # Final merged result
-    # --------------------------------------------
+    # --------------------------------------------------------
+    # Merge
+    # --------------------------------------------------------
 
-    final_df = merge_results(
+    merged = merge_search_confirmation(
         search_df,
         confirmation_summary,
     )
 
-    final_path = (
+    merged_file = (
         OUTPUT_DIR /
-        "cifar10_final_summary.csv"
+        "cifar10_search_confirmation_merged.csv"
     )
 
-    final_df.to_csv(
-        final_path,
+    merged.to_csv(
+        merged_file,
         index=False,
     )
 
     print(
-        f"\nMerged final summary: "
-        f"{len(final_df)} rows"
+        f"\nSaved merged results:\n"
+        f"  {merged_file}"
     )
-    print(f"Saved: {final_path}")
 
-    # --------------------------------------------
-    # Paper-friendly
-    # --------------------------------------------
+    # --------------------------------------------------------
+    # Paper table
+    # --------------------------------------------------------
 
-    paper_df = make_paper_table(final_df)
+    paper = make_paper_table(
+        merged
+    )
 
-    paper_path = (
+    paper_file = (
         OUTPUT_DIR /
         "cifar10_paper_table.csv"
     )
 
-    paper_df.to_csv(
-        paper_path,
+    paper.to_csv(
+        paper_file,
         index=False,
     )
 
-    print(f"Saved: {paper_path}")
+    print(
+        f"\nSaved paper-ready table:\n"
+        f"  {paper_file}"
+    )
 
-    # --------------------------------------------
-    # Display
-    # --------------------------------------------
+    # --------------------------------------------------------
+    # Completeness
+    # --------------------------------------------------------
+
+    print_completeness(
+        search_df,
+        confirmation_summary,
+    )
 
     print("\n" + "=" * 70)
-    print("CIFAR-10 FINAL SUMMARY")
+    print("PAPER TABLE")
     print("=" * 70)
 
-    if not paper_df.empty:
+    if not paper.empty:
         print(
-            paper_df.to_string(
+            paper.to_string(
                 index=False
             )
         )
-    else:
-        print("No results found.")
 
 
 if __name__ == "__main__":
