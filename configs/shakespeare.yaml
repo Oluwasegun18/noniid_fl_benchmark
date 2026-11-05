@@ -32,8 +32,8 @@ training:
   batch_size: 64
   num_workers: 0
 federation:
-  participation_rate: 1.0
-  communication_rounds: 1000
+  participation_rate: 0.05
+  communication_rounds: 500
   client_sampling_seed: 1
 algorithm:
   name: fedavg

@@ -57,7 +57,7 @@ stopping:
   target_accuracy: null
   runtime_budget_sec: null
 evaluation:
-  frequency: 5
+  frequency: 1
   reporting_rule: final_round
 output:
   save_checkpoints: true
