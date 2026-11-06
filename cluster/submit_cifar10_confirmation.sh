@@ -2,7 +2,7 @@
 #SBATCH --job-name=c10_confirm
 #SBATCH --output=logs/cifar10_confirm_%A_%a.out
 #SBATCH --error=logs/cifar10_confirm_%A_%a.err
-#SBATCH --array=20-23%1
+#SBATCH --array=22-23%1
 #SBATCH --time=168:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
