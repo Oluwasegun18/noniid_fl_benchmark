@@ -32,7 +32,7 @@ training:
   batch_size: 64
   num_workers: 0
 federation:
-  participation_rate: 0.05
+  participation_rate: 0.1
   communication_rounds: 500
   client_sampling_seed: 1
 algorithm:
