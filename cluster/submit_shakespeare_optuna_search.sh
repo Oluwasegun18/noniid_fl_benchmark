@@ -16,6 +16,11 @@ module purge
 module load python/3.12.0/default
 module load cuda/12.8/default
 
+# Avoid cluster cuDNN 9.8 overriding PyTorch's bundled cuDNN 9.20
+unset CUDNN_PATH
+unset CUDNN_ROOT
+unset LD_LIBRARY_PATH
+
 PROJECT_DIR="${PROJECT_DIR:-${SLURM_SUBMIT_DIR}}"
 cd "$PROJECT_DIR"
 
@@ -29,6 +34,7 @@ echo "Node: $(hostname)"
 echo "Job ID: ${SLURM_JOB_ID}"
 echo "Array task: ${SLURM_ARRAY_TASK_ID}"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
+echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-unset}"
 
 echo "========================================"
 echo "Python environment"
@@ -45,7 +51,7 @@ echo "========================================"
 nvidia-smi || true
 
 echo "========================================"
-echo "Python dependencies / CUDA test"
+echo "Python dependencies / CUDA / cuDNN test"
 echo "========================================"
 
 python - <<'PY'
@@ -71,6 +77,7 @@ print("scikit-learn:", sklearn.__version__)
 print("SciPy:", scipy.__version__)
 
 print("Torch CUDA build:", torch.version.cuda)
+print("cuDNN version:", torch.backends.cudnn.version())
 print("CUDA available:", torch.cuda.is_available())
 
 if not torch.cuda.is_available():
@@ -82,11 +89,26 @@ print("GPU count:", torch.cuda.device_count())
 print("GPU:", torch.cuda.get_device_name(0))
 print("Capability:", torch.cuda.get_device_capability(0))
 
+# Basic CUDA test
 x = torch.tensor([1.0], device="cuda")
 y = x * 2
 torch.cuda.synchronize()
+print("Basic CUDA execution test:", y.item())
 
-print("CUDA execution test:", y.item())
+# cuDNN / LSTM test -- important for Shakespeare
+x_seq = torch.randn(2, 10, 32, device="cuda")
+
+lstm = torch.nn.LSTM(
+    input_size=32,
+    hidden_size=64,
+    batch_first=True,
+).cuda()
+
+y_seq, _ = lstm(x_seq)
+torch.cuda.synchronize()
+
+print("LSTM/cuDNN execution test PASSED")
+print("LSTM output shape:", y_seq.shape)
 print("Environment check PASSED")
 PY
 
