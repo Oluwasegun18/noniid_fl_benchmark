@@ -2,7 +2,7 @@
 #SBATCH --job-name=shakespeare_optuna
 #SBATCH --output=logs/shakespeare_optuna_%A_%a.out
 #SBATCH --error=logs/shakespeare_optuna_%A_%a.err
-#SBATCH --array=0-7%4
+#SBATCH --array=0-7%3
 #SBATCH --time=168:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=128G
