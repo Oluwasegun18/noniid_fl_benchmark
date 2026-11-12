@@ -7,6 +7,7 @@ output_dir: search_outputs
 experiment:
   role: search
 algorithms:
+- fedgucci
 - fedavg
 - fedprox
 - scaffold
@@ -14,7 +15,6 @@ algorithms:
 - feddyn
 - moon
 - fedsam
-- fedgucci
 search:
   method: grid
   exhaustive: true
