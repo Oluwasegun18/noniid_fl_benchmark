@@ -11,3 +11,5 @@ search_outputs_1/*
 logs/*
 search_outputs_backup_20260928/*
 analysis_outputs/*
+cifar10_extracted_results/*
+cifar10_extracted_results.zip
