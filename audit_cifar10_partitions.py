@@ -74,12 +74,21 @@ client_rows = []
 for scenario, label in SCENARIOS.items():
 
     # Use FedAvg only: partition should be shared across algorithms.
+    # root = (
+    #     Path("search_outputs")
+    #     / scenario
+    #     / "fedavg"
+    #     / "confirmation_runs"
+    # )
+
     root = (
-        Path("search_outputs")
-        / scenario
-        / "fedavg"
-        / "confirmation_runs"
-    )
+            Path("search_outputs")
+            / scenario
+            / "fedavg"
+            / "candidate_runs"
+            / "trial_00000"
+            / "s42"
+        )
 
     for run_dir in sorted(root.glob("t*_s*")):
 
