@@ -87,10 +87,17 @@ for scenario, label in SCENARIOS.items():
             / "fedavg"
             / "candidate_runs"
             / "trial_00000"
-            / "s42"
+            
         )
 
-    for run_dir in sorted(root.glob("t*_s*")):
+    # for run_dir in sorted(root.glob("t*_s*")):
+
+    run_dirs = [root / "s42"]
+
+    for run_dir in run_dirs:
+        if not run_dir.exists():
+            print("Missing:", run_dir)
+            continue
 
         cfg_path = run_dir / "resolved_config.json"
 

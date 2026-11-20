@@ -48,13 +48,19 @@ def load_or_create(targets, cfg, dataset_name="dataset"):
     alpha = float(cfg["alpha"])
     clients = int(cfg["num_clients"])
     seed = int(cfg["seed"])
+    targets = np.asarray(targets)
     namespace = str(
         cfg.get("cache_namespace", dataset_name)
     ).lower()
 
+    targets_hash = hashlib.sha1(
+        targets.tobytes()
+    ).hexdigest()[:16]
+
     key = (
         f"{namespace}|dirichlet|{alpha}|{clients}|"
         f"{seed}|{len(targets)}"
+        f"{targets_hash}"
     )
     pid = hashlib.sha1(key.encode()).hexdigest()[:16]
     path = Path(cfg["cache_dir"]) / namespace / f"{pid}.json"

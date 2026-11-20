@@ -9,6 +9,7 @@ data:
   dataset: cifar10
   data_dir: ./data
   validation_fraction: 0.1
+  split_seed: 42
   augmentation: false
   subset_size: null
 partition:

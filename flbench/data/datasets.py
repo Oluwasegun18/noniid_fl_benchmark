@@ -59,30 +59,30 @@ def _artificial_partitions(train_dataset, cfg):
 
 
 def build_cifar10(cfg):
-    data=cfg['data']; seed=int(cfg['experiment']['seed']); root=str(Path(data['data_dir']))
+    data=cfg['data']; root=str(Path(data['data_dir'])); split_seed = int( data.get("split_seed", 42))
     train_aug=datasets.CIFAR10(root,train=True,download=True,transform=_image_transform(True,bool(data.get('augmentation',False)),CIFAR10_MEAN,CIFAR10_STD))
     train_eval=datasets.CIFAR10(root,train=True,download=True,transform=_image_transform(False,False,CIFAR10_MEAN,CIFAR10_STD))
     test=datasets.CIFAR10(root,train=False,download=True,transform=_image_transform(False,False,CIFAR10_MEAN,CIFAR10_STD))
-    tr,va=_split_indices(len(train_eval),float(data.get('validation_fraction',0.1)),seed,data.get('subset_size'))
+    tr,va=_split_indices(len(train_eval),float(data.get('validation_fraction',0.1)),split_seed,data.get('subset_size'))
     train=Subset(train_aug,tr); validation=Subset(train_eval,va)
     return FederatedDatasetBundle(train,validation,test,_artificial_partitions(train,cfg),'classification',10,(3,32,32),metadata={'partition_source':'artificial'})
 
 
 def build_cifar100(cfg):
-    data=cfg['data']; seed=int(cfg['experiment']['seed']); root=str(Path(data['data_dir']))
+    data=cfg['data']; root=str(Path(data['data_dir'])); split_seed = int( data.get("split_seed", 42))
     train_aug=datasets.CIFAR100(root,train=True,download=True,transform=_image_transform(True,bool(data.get('augmentation',False)),CIFAR100_MEAN,CIFAR100_STD))
     train_eval=datasets.CIFAR100(root,train=True,download=True,transform=_image_transform(False,False,CIFAR100_MEAN,CIFAR100_STD))
     test=datasets.CIFAR100(root,train=False,download=True,transform=_image_transform(False,False,CIFAR100_MEAN,CIFAR100_STD))
-    tr,va=_split_indices(len(train_eval),float(data.get('validation_fraction',0.1)),seed,data.get('subset_size'))
+    tr,va=_split_indices(len(train_eval),float(data.get('validation_fraction',0.1)),split_seed,data.get('subset_size'))
     train=Subset(train_aug,tr); validation=Subset(train_eval,va)
     return FederatedDatasetBundle(train,validation,test,_artificial_partitions(train,cfg),'classification',100,(3,32,32),metadata={'partition_source':'artificial'})
 
 
 def build_covtype(cfg):
-    data=cfg['data']; seed=int(cfg['experiment']['seed'])
+    data=cfg['data']; split_seed = int( data.get("split_seed", 42))
     bunch=fetch_covtype(data_home=str(Path(data['data_dir'])/'covtype'), download_if_missing=True)
     x=np.asarray(bunch.data,dtype=np.float32); y=np.asarray(bunch.target,dtype=np.int64)-1
-    rng=np.random.default_rng(seed); idx=np.arange(len(y)); rng.shuffle(idx)
+    rng=np.random.default_rng(split_seed); idx=np.arange(len(y)); rng.shuffle(idx)
     subset=data.get('subset_size')
     if subset is not None: idx=idx[:min(int(subset),len(idx))]
     x=x[idx]; y=y[idx]
@@ -148,12 +148,12 @@ class FEMNISTRecords(Dataset):
 
 
 def build_femnist(cfg):
-    data=cfg['data']; root=Path(data['data_dir'])/'femnist'
+    data=cfg['data']; root=Path(data['data_dir'])/'femnist'; split_seed = int( data.get("split_seed", 42))
     train_files=_leaf_files(root,'train'); test_files=_leaf_files(root,'test')
     if not train_files or not test_files:
         raise FileNotFoundError('FEMNIST expects LEAF-style JSON files under <data_dir>/femnist/{train,test}/ or <data_dir>/femnist/data/{train,test}/.')
     train_users=_read_leaf_users(train_files); test_users=_read_leaf_users(test_files)
-    train_records,val_records,client_indices,client_names=_natural_split_user_records(train_users,float(data.get('validation_fraction',0.1)),int(cfg['experiment']['seed']))
+    train_records,val_records,client_indices,client_names=_natural_split_user_records(train_users,float(data.get('validation_fraction',0.1)),split_seed)
     test_records=[(x,y) for user in sorted(test_users) for x,y in zip(test_users[user]['x'],test_users[user]['y'])]
     min_samples=int(cfg['partition'].get('min_samples_per_client',1))
     keep={cid:idx for cid,idx in client_indices.items() if len(idx)>=min_samples}
@@ -223,12 +223,12 @@ class ShakespeareRecords(Dataset):
 
 
 def build_shakespeare(cfg):
-    data=cfg['data']; root=Path(data['data_dir'])/'shakespeare'
+    data=cfg['data']; root=Path(data['data_dir'])/'shakespeare'; split_seed = int( data.get("split_seed", 42))
     train_files=_leaf_files(root,'train'); test_files=_leaf_files(root,'test')
     if not train_files or not test_files:
         raise FileNotFoundError('Shakespeare expects LEAF-style JSON files under <data_dir>/shakespeare/{train,test}/ or <data_dir>/shakespeare/data/{train,test}/.')
     train_users=_read_leaf_users(train_files); test_users=_read_leaf_users(test_files)
-    train_records,val_records,client_indices,client_names=_natural_split_user_records(train_users,float(data.get('validation_fraction',0.1)),int(cfg['experiment']['seed']))
+    train_records,val_records,client_indices,client_names=_natural_split_user_records(train_users,float(data.get('validation_fraction',0.1)),split_seed)
     test_records=[(x,y) for user in sorted(test_users) for x,y in zip(test_users[user]['x'],test_users[user]['y'])]
     vocab=list(data.get('vocabulary',DEFAULT_SHAKESPEARE_VOCAB)); seq_len=int(data.get('sequence_length',80))
     min_samples=int(cfg['partition'].get('min_samples_per_client',1))

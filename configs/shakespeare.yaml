@@ -9,6 +9,7 @@ data:
   dataset: shakespeare
   data_dir: ./data
   validation_fraction: 0.1
+  split_seed: 42
   augmentation: false
   subset_size: null
   sequence_length: 80
