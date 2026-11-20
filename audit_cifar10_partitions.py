@@ -14,6 +14,7 @@ SCENARIOS = {
     "cifar100_dirichlet_iid_like_a100p0": "alpha=100",
 }
 
+NUM_CLASSES = 100
 
 def split_indices(length, validation_fraction, seed, subset_size=None):
     rng = np.random.default_rng(seed)
@@ -65,7 +66,7 @@ def normalized_entropy(p):
 
     h = -np.sum(p * np.log2(p))
 
-    return h / math.log2(10)
+    return h / math.log2(NUM_CLASSES)
 
 
 rows = []
@@ -136,7 +137,7 @@ for scenario, label in SCENARIOS.items():
         )
 
         # --------------------------------------------------
-        # Load original CIFAR-10 labels
+        # Load original CIFAR-100 labels
         # --------------------------------------------------
 
         base = datasets.CIFAR100(
@@ -153,11 +154,19 @@ for scenario, label in SCENARIOS.items():
         # --------------------------------------------------
         # Reproduce the exact train/validation split
         # --------------------------------------------------
+        
+        split_seed = int(
+            data_cfg.get(
+                "split_seed",
+                experiment_seed,
+            )
+        )
+
 
         train_idx, val_idx = split_indices(
             len(original_targets),
             validation_fraction,
-            experiment_seed,
+            split_seed,
             subset_size,
         )
 
@@ -214,7 +223,7 @@ for scenario, label in SCENARIOS.items():
         # Global distribution for this actual training split
         global_counts = np.bincount(
             train_targets,
-            minlength=10,
+            minlength=NUM_CLASSES,
         )
 
         global_dist = (
@@ -239,7 +248,7 @@ for scenario, label in SCENARIOS.items():
 
             counts = np.bincount(
                 labels,
-                minlength=10,
+                minlength=NUM_CLASSES,
             )
 
             probs = counts / counts.sum()
@@ -269,8 +278,8 @@ for scenario, label in SCENARIOS.items():
             row = {
                 "scenario": label,
                 "run": run_dir.name,
-                "experiment_seed":
-                    experiment_seed,
+                "split_seed":
+                    split_seed,
                 "partition_seed":
                     partition_seed,
                 "alpha": alpha,
@@ -286,7 +295,7 @@ for scenario, label in SCENARIOS.items():
                     js,
             }
 
-            for c in range(10):
+            for c in range(NUM_CLASSES):
                 row[f"class_{c}"] = int(
                     counts[c]
                 )
