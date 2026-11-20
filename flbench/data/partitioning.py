@@ -90,6 +90,7 @@ def load_or_create(targets, cfg, dataset_name="dataset"):
                 "alpha": alpha,
                 "num_clients": clients,
                 "seed": seed,
+                "targets_hash": targets_hash,
                 "client_indices": partition,
                 "client_sizes": {
                     str(k): len(v)
