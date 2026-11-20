@@ -9,9 +9,9 @@ from torchvision import datasets
 
 
 SCENARIOS = {
-    "cifar10_dirichlet_highly_non_iid_a0p01": "alpha=0.01",
-    "cifar10_dirichlet_mildly_non_iid_a0p5": "alpha=0.5",
-    "cifar10_dirichlet_iid_like_a100p0": "alpha=100",
+    "cifar100_dirichlet_highly_non_iid_a0p01": "alpha=0.01",
+    "cifar100_dirichlet_mildly_non_iid_a0p5": "alpha=0.5",
+    "cifar100_dirichlet_iid_like_a100p0": "alpha=100",
 }
 
 
@@ -139,7 +139,7 @@ for scenario, label in SCENARIOS.items():
         # Load original CIFAR-10 labels
         # --------------------------------------------------
 
-        base = datasets.CIFAR10(
+        base = datasets.CIFAR100(
             root=data_dir,
             train=True,
             download=False,
@@ -172,7 +172,7 @@ for scenario, label in SCENARIOS.items():
         namespace = str(
             part.get(
                 "cache_namespace",
-                "cifar10",
+                "cifar100",
             )
         ).lower()
 
@@ -348,12 +348,12 @@ summary = pd.DataFrame(rows)
 clients = pd.DataFrame(client_rows)
 
 summary.to_csv(
-    "cifar10_partition_audit.csv",
+    "cifar100_partition_audit.csv",
     index=False,
 )
 
 clients.to_csv(
-    "cifar10_client_label_distributions.csv",
+    "cifar100_client_label_distributions.csv",
     index=False,
 )
 
